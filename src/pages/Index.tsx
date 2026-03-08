@@ -124,9 +124,10 @@ const Index = () => {
           </div>
           <Button
             type="submit"
-            className="h-12 px-6 rounded-xl text-base font-bold bg-primary text-primary-foreground hover:bg-primary/90 shadow-[0_4px_20px_hsl(48_100%_55%/0.3)]"
+            disabled={loading}
+            className="h-12 px-6 rounded-xl text-base font-bold bg-primary text-primary-foreground hover:bg-primary/90 shadow-[0_4px_20px_hsl(48_100%_55%/0.3)] disabled:opacity-50"
           >
-            Notify Me! 🔔
+            {loading ? "Sending..." : "Notify Me! 🔔"}
           </Button>
         </motion.form>
 
