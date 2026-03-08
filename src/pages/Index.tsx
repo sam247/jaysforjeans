@@ -54,7 +54,7 @@ const Index = () => {
 
   const [loading, setLoading] = useState(false);
 
-  const GOOGLE_SCRIPT_URL = "YOUR_APPS_SCRIPT_URL_HERE";
+  const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxnyFFSFRLTTCPp1ccKkfTx53FYYukxOrVWRL9B1ipB9hz1gY8wlVGzGH2lntr9DniVZQ/exec";
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
