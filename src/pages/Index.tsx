@@ -52,11 +52,27 @@ const Index = () => {
   const [email, setEmail] = useState("");
   const { toast } = useToast();
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const [loading, setLoading] = useState(false);
+
+  const GOOGLE_SCRIPT_URL = "YOUR_APPS_SCRIPT_URL_HERE";
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (email) {
+    if (!email) return;
+    setLoading(true);
+    try {
+      await fetch(GOOGLE_SCRIPT_URL, {
+        method: "POST",
+        mode: "no-cors",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim() }),
+      });
       toast({ title: "🎉 You're on the list!", description: "We'll let you know when we launch." });
       setEmail("");
+    } catch {
+      toast({ title: "Oops!", description: "Something went wrong. Please try again.", variant: "destructive" });
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -108,9 +124,10 @@ const Index = () => {
           </div>
           <Button
             type="submit"
-            className="h-12 px-6 rounded-xl text-base font-bold bg-primary text-primary-foreground hover:bg-primary/90 shadow-[0_4px_20px_hsl(48_100%_55%/0.3)]"
+            disabled={loading}
+            className="h-12 px-6 rounded-xl text-base font-bold bg-primary text-primary-foreground hover:bg-primary/90 shadow-[0_4px_20px_hsl(48_100%_55%/0.3)] disabled:opacity-50"
           >
-            Notify Me! 🔔
+            {loading ? "Sending..." : "Notify Me! 🔔"}
           </Button>
         </motion.form>
 
