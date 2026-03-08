@@ -61,12 +61,8 @@ const Index = () => {
     if (!email) return;
     setLoading(true);
     try {
-      await fetch(GOOGLE_SCRIPT_URL, {
-        method: "POST",
-        mode: "no-cors",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim() }),
-      });
+      const url = `${GOOGLE_SCRIPT_URL}?email=${encodeURIComponent(email.trim())}`;
+      await fetch(url, { mode: "no-cors" });
       toast({ title: "🎉 You're on the list!", description: "We'll let you know when we launch." });
       setEmail("");
     } catch {
