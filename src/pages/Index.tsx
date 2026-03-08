@@ -52,11 +52,27 @@ const Index = () => {
   const [email, setEmail] = useState("");
   const { toast } = useToast();
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const [loading, setLoading] = useState(false);
+
+  const GOOGLE_SCRIPT_URL = "YOUR_APPS_SCRIPT_URL_HERE";
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (email) {
+    if (!email) return;
+    setLoading(true);
+    try {
+      await fetch(GOOGLE_SCRIPT_URL, {
+        method: "POST",
+        mode: "no-cors",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim() }),
+      });
       toast({ title: "🎉 You're on the list!", description: "We'll let you know when we launch." });
       setEmail("");
+    } catch {
+      toast({ title: "Oops!", description: "Something went wrong. Please try again.", variant: "destructive" });
+    } finally {
+      setLoading(false);
     }
   };
 
