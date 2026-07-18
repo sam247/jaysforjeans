@@ -122,6 +122,17 @@ const Index = () => {
           transition={{ delay: 0.9, duration: 0.6 }}
           className="flex flex-col sm:flex-row gap-3 w-full max-w-md"
         >
+          {/* Honeypot — hidden from users, bots fill this */}
+          <input
+            type="text"
+            name="website"
+            tabIndex={-1}
+            autoComplete="off"
+            value={website}
+            onChange={(e) => setWebsite(e.target.value)}
+            style={{ position: "absolute", left: "-9999px", width: 1, height: 1, opacity: 0 }}
+            aria-hidden="true"
+          />
           <div className="flex-1 relative">
             <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={18} />
             <Input
