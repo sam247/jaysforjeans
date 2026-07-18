@@ -48,21 +48,36 @@ const Logo = () => (
   </motion.div>
 );
 
+const LEAD_ENDPOINT = "https://admin.betterranking.co.uk/sender/api/f/bs_yldwv8pqxdg3nx9kgc8iq3y0";
+
 const Index = () => {
   const [email, setEmail] = useState("");
+  const [website, setWebsite] = useState(""); // honeypot
   const { toast } = useToast();
 
   const [loading, setLoading] = useState(false);
 
-  const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxnyFFSFRLTTCPp1ccKkfTx53FYYukxOrVWRL9B1ipB9hz1gY8wlVGzGH2lntr9DniVZQ/exec";
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!email) return;
+    if (!email || loading) return;
     setLoading(true);
     try {
-      const url = `${GOOGLE_SCRIPT_URL}?email=${encodeURIComponent(email.trim())}`;
-      await fetch(url, { mode: "no-cors" });
+      const res = await fetch(LEAD_ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          email: email.trim(),
+          form_name: "coming_soon_signup",
+          landing_page: window.location.href,
+          referrer: document.referrer || undefined,
+          hostname: window.location.hostname,
+          website, // honeypot — must stay empty
+        }),
+      });
+      const data = await res.json().catch(() => ({ ok: res.ok }));
+      if (!res.ok || data?.ok === false) {
+        throw new Error(data?.error || "Request failed");
+      }
       toast({ title: "🎉 You're on the list!", description: "We'll let you know when we launch." });
       setEmail("");
     } catch {
