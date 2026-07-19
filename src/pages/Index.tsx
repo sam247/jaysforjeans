@@ -24,28 +24,11 @@ const Logo = () => (
     transition={{ type: "spring", stiffness: 200, damping: 15, delay: 0.2 }}
     className="relative"
   >
-    <div className="bg-primary px-8 py-4 sm:px-14 sm:py-6 rounded-2xl shadow-[0_8px_40px_hsl(48_100%_55%/0.4)] relative overflow-hidden">
-      {/* Decorative corner dots */}
-      <div className="absolute top-2 left-2 w-3 h-3 rounded-full bg-secondary/30" />
-      <div className="absolute top-2 right-2 w-3 h-3 rounded-full bg-secondary/30" />
-      <div className="absolute bottom-2 left-2 w-3 h-3 rounded-full bg-secondary/30" />
-      <div className="absolute bottom-2 right-2 w-3 h-3 rounded-full bg-secondary/30" />
-      
-      <div className="text-center" style={{ fontFamily: "'Fredoka One', cursive" }}>
-        <div className="text-secondary text-5xl sm:text-7xl leading-none tracking-tight">
-          JAYS
-        </div>
-        <div className="text-accent-foreground text-xl sm:text-2xl italic font-normal my-[-2px]" style={{ fontFamily: "'Quicksand', sans-serif" }}>
-          for
-        </div>
-        <div className="text-secondary text-5xl sm:text-7xl leading-none tracking-tight">
-          JEANS
-        </div>
-        <div className="text-accent-foreground text-sm sm:text-base mt-1 tracking-widest opacity-70" style={{ fontFamily: "'Quicksand', sans-serif" }}>
-          .co.uk
-        </div>
-      </div>
-    </div>
+    <img
+      src={logoAsset.url}
+      alt="Jays for Jeans"
+      className="w-full max-w-[min(90vw,520px)] h-auto rounded-2xl shadow-[0_8px_40px_hsl(48_100%_55%/0.4)]"
+    />
   </motion.div>
 );
 
