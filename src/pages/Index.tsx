@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
 import { Mail, Instagram, Twitter, Facebook, Shirt } from "lucide-react";
+import logoAsset from "@/assets/jaysforjeans-logo.png.asset.json";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
