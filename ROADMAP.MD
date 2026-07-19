@@ -3,6 +3,7 @@
 ## Current Status
 - Completed the migration from the original single-page app to a Next.js App Router project.
 - Preserved the logo asset, branded color system, headline styling, floating-shirt animations, and staged entrance motion.
+- Refreshed the site favicon in `public/favicon.ico`.
 - Kept the external lead-capture connector and the same payload contract, including the hidden honeypot field, with a Next.js route fallback for deployment resilience.
 - Added a branded `not-found` route and focused test coverage for the signup flow.
 - Verified the project with `npm run test` and `npm run build`.
