@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
 import { Mail, Instagram, Twitter, Facebook, Shirt } from "lucide-react";
-import logoAsset from "@/assets/jaysforjeans-logo.png.asset.json";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
@@ -25,9 +24,9 @@ const Logo = () => (
     className="relative"
   >
     <img
-      src={logoAsset.url}
+      src="/jaysforjeans-logo.png"
       alt="Jays for Jeans"
-      className="w-full max-w-[min(90vw,520px)] h-auto rounded-2xl shadow-[0_8px_40px_hsl(48_100%_55%/0.4)]"
+      className="w-full max-w-[min(90vw,520px)] h-auto shadow-[0_8px_40px_hsl(48_100%_55%/0.4)]"
     />
   </motion.div>
 );
