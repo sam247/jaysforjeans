@@ -1,13 +1,14 @@
 # Jays for Jeans
 
-Coming-soon landing page rebuilt as a Next.js app and prepared for Vercel deployment.
+A mobile-first 30-second canvas arcade game: catch as many falling Jays as possible in a pair of jeans.
 
 ## Stack
 
 - Next.js App Router
 - TypeScript
 - Tailwind CSS
-- Framer Motion
+- Canvas 2D and Web Audio
+- Vercel Analytics
 - Vitest
 
 ## Development
@@ -26,6 +27,7 @@ npm run start
 
 ## Project Notes
 
-- Brand visuals, logo treatment, and motion were preserved from the original landing page.
-- Lead capture posts through a Next.js route handler that forwards to the existing external connector.
-- Progress and follow-up items are tracked in `ROADMAP.MD`.
+- The original yellow/red logo and dark-blue visual direction are preserved.
+- Gameplay uses a lightweight deterministic simulation with a high-DPI canvas renderer.
+- Personal best and mute preference are device-local; there is no account or signup flow.
+- A public leaderboard is intentionally deferred until persistent storage and server-side score safeguards are available.

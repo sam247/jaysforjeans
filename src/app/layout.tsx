@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import { Analytics } from "@vercel/analytics/next";
 import { Fredoka, Quicksand } from "next/font/google";
 import type { ReactNode } from "react";
-import { Toaster } from "sonner";
 
 import "./globals.css";
 
@@ -19,9 +18,9 @@ const displayFont = Fredoka({
 });
 
 export const metadata: Metadata = {
-  title: "Jays for Jeans | Coming Soon",
+  title: "How Many Jays Can You Get Into Jeans?",
   description:
-    "Jays for Jeans is stitching something special together. Join the launch list to hear when we go live.",
+    "Catch as many falling Jays as you can in 30 seconds. A tiny trouser-based arcade game from Jays for Jeans.",
 };
 
 export default function RootLayout({
@@ -34,7 +33,6 @@ export default function RootLayout({
       <body className={`${bodyFont.variable} ${displayFont.variable} font-sans antialiased`}>
         {children}
         <Analytics />
-        <Toaster richColors position="top-center" />
       </body>
     </html>
   );
