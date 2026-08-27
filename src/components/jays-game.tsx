@@ -2,6 +2,7 @@
 
 import { track } from "@vercel/analytics";
 import { ChevronLeft, MapPin, Pause, Play, Send, Share2, Trophy, Volume2, VolumeX } from "lucide-react";
+import Link from "next/link";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import {
@@ -413,8 +414,11 @@ export function JaysGame() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const simulationRef = useRef<GameSimulation>();
+  const demoSimulationRef = useRef<GameSimulation>();
   const animationRef = useRef<number>();
+  const demoAnimationRef = useRef<number>();
   const lastFrameRef = useRef(0);
+  const demoLastFrameRef = useRef(0);
   const phaseRef = useRef<GamePhase>("intro");
   const countdownTimersRef = useRef<number[]>([]);
   const pressedKeysRef = useRef(new Set<string>());
@@ -486,7 +490,9 @@ export function JaysGame() {
     canvas.style.width = `${width}px`;
     canvas.style.height = `${height}px`;
     const simulation = simulationRef.current;
+    const demoSimulation = demoSimulationRef.current;
     if (simulation) resizeSimulation(simulation, width, height);
+    if (demoSimulation) resizeSimulation(demoSimulation, width, height);
     const context = canvas.getContext("2d");
     if (!context) return;
     context.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -494,7 +500,8 @@ export function JaysGame() {
     if (simulation && phaseRef.current !== "intro") {
       simulation.jays.forEach((jay) => drawJay(context, jay, simulation.elapsedMs));
     }
-    drawJeans(context, simulation, width, height, 0, simulation?.elapsedMs ?? 0);
+    const visibleSimulation = phaseRef.current === "intro" ? demoSimulation : simulation;
+    drawJeans(context, visibleSimulation, width, height, 0, visibleSimulation?.elapsedMs ?? 0);
   }, []);
 
   const playTone = useCallback(
@@ -996,6 +1003,58 @@ export function JaysGame() {
   }, [board, phase]);
 
   useEffect(() => {
+    if (phase !== "intro") return;
+    const canvas = canvasRef.current;
+    const stage = stageRef.current;
+    if (!canvas || !stage) return;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    const rect = stage.getBoundingClientRect();
+    const demo = createSimulation(Math.max(1, rect.width), Math.max(1, rect.height));
+    demo.config = {
+      ...demo.config,
+      target: 999,
+      durationMs: 3_600_000,
+      spawnIntervalMs: 1_350,
+      maxActiveJays: 3,
+      speedHeightsPerSecond: demo.config.speedHeightsPerSecond * 0.72,
+    };
+    demo.stats.target = demo.config.target;
+    demoSimulationRef.current = demo;
+    demoLastFrameRef.current = 0;
+
+    const renderDemo = (timestamp: number) => {
+      if (phaseRef.current !== "intro") return;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const deltaMs = demoLastFrameRef.current ? Math.min(34, timestamp - demoLastFrameRef.current) : 0;
+      demoLastFrameRef.current = timestamp;
+      const leadJay = demo.jays
+        .filter((jay) => jay.status === "falling")
+        .reduce<Jay | undefined>((lowest, jay) => (!lowest || jay.y > lowest.y ? jay : lowest), undefined);
+      demo.playerTargetX = leadJay?.x ?? demo.width / 2 + Math.sin(timestamp * 0.0007) * demo.width * 0.22;
+      const motionScale = reducedMotionRef.current ? 0.28 : 0.55;
+      if (!document.hidden) updateSimulation(demo, deltaMs * motionScale);
+
+      context.setTransform(dpr, 0, 0, dpr, 0, 0);
+      drawBackground(context, demo.width, demo.height);
+      context.save();
+      context.globalAlpha = 0.48;
+      demo.jays.forEach((jay) => drawJay(context, jay, demo.elapsedMs));
+      drawJeans(context, demo, demo.width, demo.height, 0, demo.elapsedMs);
+      context.restore();
+      demoAnimationRef.current = window.requestAnimationFrame(renderDemo);
+    };
+
+    demoAnimationRef.current = window.requestAnimationFrame(renderDemo);
+    return () => {
+      window.cancelAnimationFrame(demoAnimationRef.current ?? 0);
+      demoAnimationRef.current = undefined;
+      demoSimulationRef.current = undefined;
+      demoLastFrameRef.current = 0;
+    };
+  }, [phase]);
+
+  useEffect(() => {
     const handleVisibility = () => {
       if (document.hidden) pauseGame();
     };
@@ -1024,6 +1083,7 @@ export function JaysGame() {
   useEffect(
     () => () => {
       window.cancelAnimationFrame(animationRef.current ?? 0);
+      window.cancelAnimationFrame(demoAnimationRef.current ?? 0);
       clearCountdownTimers();
       void audioContextRef.current?.close();
     },
@@ -1073,7 +1133,15 @@ export function JaysGame() {
 
         {phase === "intro" && (
           <div className="screen screen--intro">
-            <img src="/jaysforjeans-logo.png" alt="Jays for Jeans" className="hero-logo" />
+            <div className="intro-brand">
+              <img src="/jaysforjeans-logo.png" alt="Jays for Jeans" className="hero-logo" />
+              {leaderboardAvailable && (
+                <button className="share-button intro-leaderboard-button" type="button" onClick={() => setShowIntroLeaderboard(true)}>
+                  <Trophy aria-hidden="true" />
+                  VIEW LEADERBOARD
+                </button>
+              )}
+            </div>
             <div className="intro-copy">
               <p className="eyebrow">A highly scientific trouser challenge</p>
               <h1>HOW MANY LEVELS<br />CAN YOUR JEANS SURVIVE?</h1>
@@ -1083,14 +1151,11 @@ export function JaysGame() {
               <Play fill="currentColor" aria-hidden="true" />
               PLAY
             </button>
-            {leaderboardAvailable && (
-              <button className="share-button intro-leaderboard-button" type="button" onClick={() => setShowIntroLeaderboard(true)}>
-                <Trophy aria-hidden="true" />
-                VIEW LEADERBOARD
-              </button>
-            )}
-            {bestLevel > 0 && <p className="best-line">BEST LEVEL <strong>{bestLevel}</strong></p>}
-            <p className="control-hint">Drag anywhere — the jeans sit above your thumb</p>
+            <div className="intro-footer">
+              {bestLevel > 0 && <p className="best-line">BEST LEVEL <strong>{bestLevel}</strong></p>}
+              <p className="control-hint">Catch as many Jays in Jeans as you can</p>
+              <Link className="privacy-link" href="/privacy">Privacy</Link>
+            </div>
           </div>
         )}
 

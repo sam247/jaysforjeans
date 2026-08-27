@@ -8,6 +8,11 @@ const trackMock = vi.hoisted(() => vi.fn());
 const leaderboardStatusMock = vi.hoisted(() => vi.fn());
 const getLeaderboardMock = vi.hoisted(() => vi.fn());
 vi.mock("@vercel/analytics", () => ({ track: trackMock }));
+vi.mock("next/link", () => ({
+  default: ({ children, href, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }) => (
+    <a href={href} {...props}>{children}</a>
+  ),
+}));
 vi.mock("@/lib/leaderboard", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/leaderboard")>();
   return {
@@ -63,6 +68,8 @@ describe("JaysGame", () => {
 
     expect(screen.getByRole("heading", { name: /how many levels/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^play$/i })).toBeInTheDocument();
+    expect(screen.getByText("Catch as many Jays in Jeans as you can")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Privacy" })).toHaveAttribute("href", "/privacy");
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
   });
 
