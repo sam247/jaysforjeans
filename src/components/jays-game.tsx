@@ -1060,7 +1060,11 @@ export function JaysGame() {
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase();
-      if (["arrowleft", "arrowright", "a", "d"].includes(key)) {
+      const target = event.target;
+      const isTyping = target instanceof HTMLElement && (
+        target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)
+      );
+      if (phaseRef.current === "playing" && !isTyping && ["arrowleft", "arrowright", "a", "d"].includes(key)) {
         event.preventDefault();
         pressedKeysRef.current.add(key);
       }

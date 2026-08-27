@@ -147,6 +147,23 @@ describe("JaysGame", () => {
     expect(trackMock.mock.calls.filter(([name]) => name === "game_start")).toHaveLength(1);
   });
 
+  it("does not reserve A or D while the player is typing", () => {
+    render(<JaysGame />);
+    fireEvent.click(screen.getByRole("button", { name: /^play$/i }));
+    act(() => vi.advanceTimersByTime(1200));
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+
+    const aKey = new KeyboardEvent("keydown", { key: "a", bubbles: true, cancelable: true });
+    const dKey = new KeyboardEvent("keydown", { key: "d", bubbles: true, cancelable: true });
+    input.dispatchEvent(aKey);
+    input.dispatchEvent(dKey);
+
+    expect(aKey.defaultPrevented).toBe(false);
+    expect(dKey.defaultPrevented).toBe(false);
+    input.remove();
+  });
+
   it("cancels animation work and countdown timers on unmount", () => {
     const clearTimeoutSpy = vi.spyOn(window, "clearTimeout");
     const { unmount } = render(<JaysGame />);
