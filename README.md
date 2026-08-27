@@ -1,6 +1,6 @@
 # Jays for Jeans
 
-A mobile-first 30-second canvas arcade game: catch as many falling Jays as possible in a pair of jeans.
+A mobile-first canvas survival game: clear increasingly frantic 12-second Jay-catching levels for as long as your jeans can cope.
 
 ## Stack
 
@@ -29,5 +29,9 @@ npm run start
 
 - The original yellow/red logo and dark-blue visual direction are preserved.
 - Gameplay uses a lightweight deterministic simulation with a high-DPI canvas renderer.
-- Personal best and mute preference are device-local; there is no account or signup flow.
-- A public leaderboard is intentionally deferred until persistent storage and server-side score safeguards are available.
+- Highest level, best-run details, and mute preference are device-local; there is no account or signup flow.
+- The optional Surrey Quays leaderboard activates when Upstash Redis and a signing secret are configured; gameplay is independent of it.
+
+## Optional Leaderboard
+
+Copy `.env.example` to `.env.local` and configure either the Upstash Redis REST variables or equivalent `KV_REST_API_URL` / `KV_REST_API_TOKEN` values, plus a long random `LEADERBOARD_SIGNING_SECRET`. The API validates run age, level targets, progress, cumulative Jays, and submission bounds; it allows one submission per signed run, sanitises nicknames, and whitelists board identifiers. Rankings use highest level, then progress in the failed level, then total Jays.

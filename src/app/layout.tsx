@@ -18,9 +18,9 @@ const displayFont = Fredoka({
 });
 
 export const metadata: Metadata = {
-  title: "How Many Jays Can You Get Into Jeans?",
+  title: "How Many Levels Can Your Jeans Survive?",
   description:
-    "Catch as many falling Jays as you can in 30 seconds. A tiny trouser-based arcade game from Jays for Jeans.",
+    "Hit each Jay target before time runs out in an endless trouser-based survival game from Jays for Jeans.",
 };
 
 export default function RootLayout({

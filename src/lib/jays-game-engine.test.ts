@@ -1,108 +1,138 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  ROUND_DURATION_MS,
+  LEVEL_DURATION_MS,
   TOUCH_LAG_CAP_PX,
   applyTouchPosition,
+  createNextLevel,
   createSimulation,
-  getDifficulty,
+  getLevelConfig,
+  getLevelTarget,
   getPlayerSize,
+  maximumRunJays,
+  minimumRunJays,
   resultMessage,
   updateSimulation,
+  type GameSimulation,
   type Jay,
+  type JayKind,
 } from "@/lib/jays-game-engine";
 
 const fixedRandom = (value = 0.5) => () => value;
 
-describe("jays game engine", () => {
-  it("starts with a visible, reachable Jay on the first playable frame", () => {
+function catchJay(simulation: GameSimulation, kind: JayKind = "normal") {
+  const playerSize = getPlayerSize(simulation.width);
+  const waistY = simulation.height - playerSize.height + 12;
+  const jay: Jay = {
+    id: simulation.nextId++, kind, status: "falling", variant: 0,
+    x: simulation.playerX, y: waistY, radius: kind === "golden" ? 20 : 22,
+    speedFactor: 1, drift: 1, wobble: 0, caughtAgeMs: 0,
+  };
+  simulation.jays = [jay];
+  return updateSimulation(simulation, 0, fixedRandom());
+}
+
+describe("jays survival engine", () => {
+  it("starts every level with a visible, reachable Jay", () => {
     const simulation = createSimulation(390, 760, fixedRandom());
     const firstJay = simulation.jays[0];
-
     expect(firstJay.kind).toBe("normal");
     expect(firstJay.y + firstJay.radius).toBeGreaterThan(0);
     expect(firstJay.x).toBeGreaterThan(390 * 0.35);
     expect(firstJay.x).toBeLessThan(390 * 0.65);
-    expect(simulation.spawnAccumulatorMs).toBe(0);
   });
 
-  it("matches the planned continuous difficulty checkpoints", () => {
-    expect(getDifficulty(0)).toMatchObject({ speedHeightsPerSecond: 0.2, spawnIntervalMs: 900 });
-    expect(getDifficulty(5000)).toMatchObject({ speedHeightsPerSecond: 0.25, spawnIntervalMs: 760 });
-    expect(getDifficulty(15_000)).toMatchObject({ speedHeightsPerSecond: 0.35, spawnIntervalMs: 580 });
-    expect(getDifficulty(23_000)).toMatchObject({ speedHeightsPerSecond: 0.48, spawnIntervalMs: 440 });
-    expect(getDifficulty(30_000)).toMatchObject({ speedHeightsPerSecond: 0.6, spawnIntervalMs: 340 });
+  it("uses the hand-tuned opening target curve", () => {
+    expect([1, 2, 3, 4, 5, 6].map(getLevelTarget)).toEqual([5, 7, 9, 11, 13, 15]);
+    expect(getLevelConfig(1)).toMatchObject({ durationMs: 12_000, spawnIntervalMs: 1_220, maxActiveJays: 4 });
+    expect(getLevelConfig(6)).toMatchObject({ durationMs: 12_000, spawnIntervalMs: 455, maxActiveJays: 6 });
+  });
+
+  it("generates increasingly difficult but bounded endless levels", () => {
+    const level7 = getLevelConfig(7);
+    const level12 = getLevelConfig(12);
+    const level100 = getLevelConfig(100);
+    expect(level12.target).toBeGreaterThan(level7.target);
+    expect(level12.speedHeightsPerSecond).toBeGreaterThan(level7.speedHeightsPerSecond);
+    expect(level12.spawnIntervalMs).toBeLessThan(level7.spawnIntervalMs);
+    expect(level12.catchWidthMultiplier).toBeLessThan(level7.catchWidthMultiplier);
+    expect(level100).toMatchObject({ target: 42, spawnIntervalMs: 220, maxActiveJays: 8 });
+    for (let level = 1; level <= 100; level += 1) {
+      const config = getLevelConfig(level);
+      const theoreticalSpawns = 1 + Math.floor(config.durationMs / config.spawnIntervalMs);
+      expect(config.target).toBeLessThan(theoreticalSpawns);
+    }
   });
 
   it("never leaves the jeans more than the touch lag cap behind", () => {
     const width = 390;
-    const playerWidth = getPlayerSize(width).width;
     const target = 300;
-    const next = applyTouchPosition(80, target, width, playerWidth, 16);
-
+    const next = applyTouchPosition(80, target, width, getPlayerSize(width).width, 16);
     expect(target - next).toBeLessThanOrEqual(TOUCH_LAG_CAP_PX);
   });
 
-  it("scores normal and golden catches correctly with a generous waistband", () => {
-    const simulation = createSimulation(390, 760, fixedRandom());
-    const playerSize = getPlayerSize(simulation.width);
-    const waistY = simulation.height - playerSize.height + 12;
-    const base: Jay = {
-      id: 20,
-      kind: "normal",
-      status: "falling",
-      variant: 0,
-      x: simulation.playerX + playerSize.width * 0.5,
-      y: waistY,
-      radius: 22,
-      speedFactor: 1,
-      drift: 1,
-      wobble: 0,
-      caughtAgeMs: 0,
-    };
-    simulation.jays = [base, { ...base, id: 21, kind: "golden", x: simulation.playerX - playerSize.width * 0.5 }];
-
-    const events = updateSimulation(simulation, 0, fixedRandom());
-
-    expect(events.filter((event) => event.type === "catch")).toHaveLength(2);
-    expect(simulation.stats).toMatchObject({ score: 6, normalCatches: 1, goldenCatches: 1 });
+  it("counts a Golden Jay as five towards the level target", () => {
+    const simulation = createSimulation(390, 760, fixedRandom(), 6);
+    const events = catchJay(simulation, "golden");
+    expect(events).toContainEqual(expect.objectContaining({ type: "catch", contribution: 5, levelProgress: 5 }));
+    expect(simulation.stats).toMatchObject({ totalJays: 5, goldenCatches: 1, progress: 5 });
   });
 
-  it("records misses without reducing the score", () => {
+  it("ends a level immediately when its target is reached and only once", () => {
     const simulation = createSimulation(390, 760, fixedRandom());
-    simulation.stats.score = 4;
+    simulation.levelProgress = 4;
+    simulation.stats.progress = 4;
+    simulation.stats.totalJays = 4;
+    const events = catchJay(simulation);
+    expect(events).toContainEqual({ type: "level_complete", level: 1, progress: 5, target: 5 });
+    expect(simulation.elapsedMs).toBe(0);
+    expect(updateSimulation(simulation, 1000, fixedRandom())).toEqual([]);
+  });
+
+  it("lets a Golden Jay overshoot the target and clears immediately", () => {
+    const simulation = createSimulation(390, 760, fixedRandom(), 6);
+    simulation.levelProgress = 11;
+    simulation.stats.progress = 11;
+    simulation.stats.totalJays = 11;
+    const events = catchJay(simulation, "golden");
+    expect(events).toContainEqual({ type: "level_complete", level: 6, progress: 16, target: 15 });
+  });
+
+  it("carries run statistics into the next level and resets level state", () => {
+    const current = createSimulation(390, 760, fixedRandom());
+    current.stats.totalJays = 5;
+    current.stats.normalCatches = 5;
+    current.levelProgress = 5;
+    const next = createNextLevel(current, fixedRandom());
+    expect(next).toMatchObject({ level: 2, levelProgress: 0, elapsedMs: 0 });
+    expect(next.stats).toMatchObject({ highestLevel: 2, progress: 0, target: 7, totalJays: 5, normalCatches: 5 });
+    expect(next.jays[0].y + next.jays[0].radius).toBeGreaterThan(0);
+  });
+
+  it("ends the whole run once when a level timer expires", () => {
+    const simulation = createSimulation(390, 760, fixedRandom());
+    simulation.elapsedMs = LEVEL_DURATION_MS - 10;
+    expect(updateSimulation(simulation, 10, fixedRandom())).toContainEqual({ type: "run_complete" });
+    expect(updateSimulation(simulation, 10, fixedRandom())).toEqual([]);
+  });
+
+  it("records misses without reducing run progress", () => {
+    const simulation = createSimulation(390, 760, fixedRandom());
+    simulation.levelProgress = 2;
+    simulation.stats.progress = 2;
     simulation.jays[0].y = simulation.height + simulation.jays[0].radius + 1;
-
-    const events = updateSimulation(simulation, 0, fixedRandom());
-
-    expect(events).toContainEqual({ type: "miss" });
-    expect(simulation.stats).toMatchObject({ score: 4, misses: 1 });
+    expect(updateSimulation(simulation, 0, fixedRandom())).toContainEqual({ type: "miss" });
+    expect(simulation.stats).toMatchObject({ progress: 2, misses: 1 });
   });
 
-  it("guarantees a golden spawn after its scheduled opportunity", () => {
-    const simulation = createSimulation(390, 760, fixedRandom());
-    simulation.elapsedMs = simulation.goldenDueMs;
-    simulation.spawnAccumulatorMs = 1000;
-
-    updateSimulation(simulation, 1, fixedRandom());
-
-    expect(simulation.jays.some((jay) => jay.kind === "golden")).toBe(true);
-    expect(simulation.goldenSpawned).toBe(true);
+  it("provides sane validation bounds for completed-level Golden overshoot", () => {
+    expect(minimumRunJays(3, 4)).toBe(16);
+    expect(maximumRunJays(3, 4)).toBe(24);
   });
 
-  it("ends once, exactly at the round duration", () => {
-    const simulation = createSimulation(390, 760, fixedRandom());
-    simulation.elapsedMs = ROUND_DURATION_MS - 10;
-
-    expect(updateSimulation(simulation, 10, fixedRandom())).toContainEqual({ type: "round_complete" });
-    expect(updateSimulation(simulation, 10, fixedRandom())).not.toContainEqual({ type: "round_complete" });
-  });
-
-  it("uses the requested result copy bands", () => {
-    expect(resultMessage(9)).toBe("Warm-up trousers.");
-    expect(resultMessage(10)).toBe("Respectable trouser work.");
-    expect(resultMessage(20)).toBe("That’s an unreasonable number of Jays.");
-    expect(resultMessage(30)).toBe("Elite denim operations.");
-    expect(resultMessage(40)).toBe("Surrey Quays wasn’t ready for this.");
+  it("uses level-based result copy", () => {
+    expect(resultMessage(1)).toBe("The jeans needed warming up.");
+    expect(resultMessage(6)).toBe("Surrey Quays is taking notes.");
+    expect(resultMessage(12)).toBe("Someone inspect those trousers.");
   });
 });

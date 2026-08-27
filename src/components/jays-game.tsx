@@ -1,12 +1,13 @@
 "use client";
 
 import { track } from "@vercel/analytics";
-import { Pause, Play, Volume2, VolumeX } from "lucide-react";
+import { MapPin, Pause, Play, Send, Share2, Trophy, Volume2, VolumeX } from "lucide-react";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import {
-  ROUND_DURATION_MS,
+  LEVEL_DURATION_MS,
   clampPlayerX,
+  createNextLevel,
   createSimulation,
   getPlayerSize,
   resizeSimulation,
@@ -15,11 +16,33 @@ import {
   type GamePhase,
   type GameSimulation,
   type Jay,
-  type RoundStats,
+  type RunStats,
 } from "@/lib/jays-game-engine";
+import {
+  boardLabel,
+  createLeaderboardSession,
+  getLeaderboard,
+  getLeaderboardStatus,
+  submitLeaderboardScore,
+} from "@/lib/leaderboard";
+import {
+  DEFAULT_BOARD_ID,
+  sanitizeBoardId,
+  validateNickname,
+  type BoardId,
+  type LeaderboardEntry,
+  type LeaderboardPeriod,
+} from "@/lib/leaderboard-shared";
 
-const BEST_SCORE_KEY = "jaysforjeans.personalBest.v1";
+const BEST_RUN_KEY = "jaysforjeans.personalBest.v2";
 const MUTED_KEY = "jaysforjeans.muted.v1";
+
+type StoredBestRun = {
+  version: 2;
+  highestLevel: number;
+  totalJays: number;
+  date: string;
+};
 
 type Particle = {
   x: number;
@@ -231,10 +254,25 @@ function drawJeans(
   width: number,
   height: number,
   squash: number,
+  elapsedMs = 0,
+  directionWobble = 0,
+  goldenReaction = 0,
 ) {
   const size = getPlayerSize(width);
   const x = simulation?.playerX ?? width / 2;
-  const y = height - size.height + 12;
+  const nearestJay = simulation?.jays
+    .filter((jay) => jay.status === "falling")
+    .reduce<Jay | undefined>((nearest, jay) => {
+      if (!nearest) return jay;
+      const targetY = height - size.height;
+      return Math.abs(jay.y - targetY) < Math.abs(nearest.y - targetY) ? jay : nearest;
+    }, undefined);
+  const approachDistance = nearestJay
+    ? Math.hypot(nearestJay.x - x, nearestJay.y - (height - size.height))
+    : Number.POSITIVE_INFINITY;
+  const proximityFlex = Math.max(0, Math.min(1, 1 - approachDistance / Math.max(150, height * 0.22)));
+  const idleBounce = Math.sin(elapsedMs * 0.006) * 2.2;
+  const y = height - size.height + 12 + idleBounce;
   const lean = simulation ? Math.max(-0.08, Math.min(0.08, simulation.playerVelocity * 0.24)) : 0;
   const denim = context.createLinearGradient(0, y, 0, y + size.height);
   denim.addColorStop(0, "#3479b7");
@@ -242,11 +280,11 @@ function drawJeans(
 
   context.save();
   context.translate(x, y + size.height * 0.45);
-  context.rotate(lean);
-  context.scale(1 + squash * 0.09, 1 - squash * 0.1);
+  context.rotate(lean + Math.sin(elapsedMs * 0.025) * directionWobble * 0.075);
+  context.scale(1 + squash * 0.12 + goldenReaction * 0.035, 1 - squash * 0.13 + goldenReaction * 0.02);
   context.translate(-x, -(y + size.height * 0.45));
-  context.shadowColor = "rgba(0, 0, 0, 0.35)";
-  context.shadowBlur = 14;
+  context.shadowColor = goldenReaction > 0.05 ? "rgba(255, 220, 55, 0.72)" : "rgba(0, 0, 0, 0.35)";
+  context.shadowBlur = 14 + goldenReaction * 22;
   context.shadowOffsetY = 8;
 
   context.fillStyle = denim;
@@ -269,9 +307,28 @@ function drawJeans(
   context.strokeStyle = "#ffd26a";
   context.lineWidth = 2;
   context.beginPath();
-  context.ellipse(x, y + 10, size.width * 0.46, 11, 0, 0, Math.PI * 2);
+  context.ellipse(
+    x,
+    y + 10,
+    size.width * (0.46 + proximityFlex * 0.025),
+    11 + proximityFlex * 5 + squash * 2.5,
+    0,
+    0,
+    Math.PI * 2,
+  );
   context.fill();
   context.stroke();
+
+  if (proximityFlex > 0.04 || squash > 0.08) {
+    context.save();
+    context.globalAlpha = Math.min(0.7, proximityFlex * 0.5 + squash * 0.28);
+    context.strokeStyle = goldenReaction > 0.1 ? "#fff2a1" : "#8cc8f4";
+    context.lineWidth = 3;
+    context.beginPath();
+    context.ellipse(x, y + 12, size.width * 0.39, 6 + proximityFlex * 4, 0, 0, Math.PI * 2);
+    context.stroke();
+    context.restore();
+  }
 
   context.strokeStyle = "#f2bd55";
   context.lineWidth = 2;
@@ -361,20 +418,40 @@ export function JaysGame() {
   const scorePopsRef = useRef<ScorePop[]>([]);
   const squashRef = useRef(0);
   const shakeRef = useRef(0);
+  const directionWobbleRef = useRef(0);
+  const goldenReactionRef = useRef(0);
+  const previousVelocitySignRef = useRef(0);
   const audioContextRef = useRef<AudioContext>();
-  const bestAtRoundStartRef = useRef(0);
+  const bestAtRunStartRef = useRef(0);
   const personalBestTrackedRef = useRef(false);
   const reducedMotionRef = useRef(false);
+  const leaderboardSessionRef = useRef<string>();
+  const leaderboardViewTrackedRef = useRef(false);
+  const startNextLevelRef = useRef<() => void>(() => undefined);
 
   const [phase, setPhaseState] = useState<GamePhase>("intro");
   const [countdown, setCountdown] = useState("3");
-  const [score, setScore] = useState(0);
-  const [secondsLeft, setSecondsLeft] = useState(30);
-  const [bestScore, setBestScore] = useState(0);
+  const [level, setLevel] = useState(1);
+  const [levelProgress, setLevelProgress] = useState(0);
+  const [levelTarget, setLevelTarget] = useState(5);
+  const [secondsLeft, setSecondsLeft] = useState(12);
+  const [bestLevel, setBestLevel] = useState(0);
   const [newBest, setNewBest] = useState(false);
   const [muted, setMutedState] = useState(false);
-  const [finalStats, setFinalStats] = useState<RoundStats>({
-    score: 0,
+  const [board, setBoard] = useState<BoardId>(DEFAULT_BOARD_ID);
+  const [leaderboardAvailable, setLeaderboardAvailable] = useState(false);
+  const [leaderboardPeriod, setLeaderboardPeriod] = useState<LeaderboardPeriod>("today");
+  const [leaderboardEntries, setLeaderboardEntries] = useState<LeaderboardEntry[]>([]);
+  const [leaderboardLoading, setLeaderboardLoading] = useState(false);
+  const [nickname, setNickname] = useState("");
+  const [leaderboardFeedback, setLeaderboardFeedback] = useState("");
+  const [submittingScore, setSubmittingScore] = useState(false);
+  const [shareFeedback, setShareFeedback] = useState("");
+  const [finalStats, setFinalStats] = useState<RunStats>({
+    highestLevel: 1,
+    progress: 0,
+    target: 5,
+    totalJays: 0,
     normalCatches: 0,
     goldenCatches: 0,
     misses: 0,
@@ -411,7 +488,7 @@ export function JaysGame() {
     if (simulation && phaseRef.current !== "intro") {
       simulation.jays.forEach((jay) => drawJay(context, jay, simulation.elapsedMs));
     }
-    drawJeans(context, simulation, width, height, 0);
+    drawJeans(context, simulation, width, height, 0, simulation?.elapsedMs ?? 0);
   }, []);
 
   const playTone = useCallback(
@@ -445,20 +522,36 @@ export function JaysGame() {
     void audioContextRef.current?.resume();
   }, []);
 
-  const finishRound = useCallback(() => {
+  const finishRun = useCallback(() => {
     const simulation = simulationRef.current;
     if (!simulation || phaseRef.current === "results") return;
     window.cancelAnimationFrame(animationRef.current ?? 0);
     const stats = { ...simulation.stats };
     setFinalStats(stats);
-    setScore(stats.score);
     setSecondsLeft(0);
+    if (stats.highestLevel > bestAtRunStartRef.current) {
+      personalBestTrackedRef.current = true;
+      setNewBest(true);
+      setBestLevel(stats.highestLevel);
+      try {
+        localStorage.setItem(BEST_RUN_KEY, JSON.stringify({
+          version: 2,
+          highestLevel: stats.highestLevel,
+          totalJays: stats.totalJays,
+          date: new Date().toISOString(),
+        } satisfies StoredBestRun));
+      } catch {
+        // Local best storage is optional.
+      }
+      safeTrack("personal_best", { highest_level: stats.highestLevel, total_jays: stats.totalJays });
+    }
     setPhase("results");
     safeTrack("game_complete", {
-      score: stats.score,
-      normal_catches: stats.normalCatches,
-      golden_catches: stats.goldenCatches,
-      total_catches: stats.normalCatches + stats.goldenCatches,
+      highest_level: stats.highestLevel,
+      progress_in_failed_level: stats.progress,
+      target_in_failed_level: stats.target,
+      total_jays: stats.totalJays,
+      golden_jays: stats.goldenCatches,
       misses: stats.misses,
     });
   }, [setPhase]);
@@ -481,16 +574,22 @@ export function JaysGame() {
       }
 
       const events = updateSimulation(simulation, deltaMs);
+      const velocitySign = Math.abs(simulation.playerVelocity) > 0.035 ? Math.sign(simulation.playerVelocity) : 0;
+      if (
+        velocitySign !== 0 &&
+        previousVelocitySignRef.current !== 0 &&
+        velocitySign !== previousVelocitySignRef.current
+      ) {
+        directionWobbleRef.current = 1;
+      }
+      if (velocitySign !== 0) previousVelocitySignRef.current = velocitySign;
       for (const event of events) {
-        if (event.type === "round_complete") {
-          finishRound();
-          return;
-        }
         if (event.type !== "catch") continue;
         const golden = event.kind === "golden";
-        setScore(event.score);
-        squashRef.current = golden ? 1.5 : 1;
-        shakeRef.current = golden ? 1 : 0.45;
+        setLevelProgress(event.levelProgress);
+        squashRef.current = golden ? 1.85 : 1.25;
+        shakeRef.current = golden ? 1.15 : 0.5;
+        if (golden) goldenReactionRef.current = 1;
         scorePopsRef.current.push({
           x: event.x,
           y: event.y,
@@ -515,40 +614,66 @@ export function JaysGame() {
         }
         playTone(golden);
         if (navigator.vibrate) navigator.vibrate(golden ? [18, 28, 24] : 12);
-        if (golden) safeTrack("golden_jay_caught", { score: event.score });
-
-        if (event.score > bestAtRoundStartRef.current && !personalBestTrackedRef.current) {
-          personalBestTrackedRef.current = true;
-          setNewBest(true);
-          setBestScore(event.score);
-          try {
-            localStorage.setItem(BEST_SCORE_KEY, String(event.score));
-          } catch {
-            // Local score storage is optional.
-          }
-          safeTrack("personal_best", { score: event.score });
-        } else if (personalBestTrackedRef.current) {
-          setBestScore(event.score);
-          try {
-            localStorage.setItem(BEST_SCORE_KEY, String(event.score));
-          } catch {
-            // Local score storage is optional.
-          }
-        }
+        if (golden) safeTrack("golden_jay_caught", { level: simulation.level, total_jays: event.totalJays });
       }
 
-      setSecondsLeft(Math.max(0, Math.ceil((ROUND_DURATION_MS - simulation.elapsedMs) / 1000)));
+      const cleared = events.find((event) => event.type === "level_complete");
+      if (cleared?.type === "level_complete") {
+        setLevelProgress(Math.min(cleared.progress, cleared.target));
+        shakeRef.current = 1.4;
+        context.setTransform(dpr, 0, 0, dpr, 0, 0);
+        drawBackground(context, simulation.width, simulation.height);
+        simulation.jays.forEach((jay) => drawJay(context, jay, simulation.elapsedMs));
+        drawJeans(
+          context,
+          simulation,
+          simulation.width,
+          simulation.height,
+          squashRef.current,
+          simulation.elapsedMs,
+          directionWobbleRef.current,
+          goldenReactionRef.current,
+        );
+        drawEffects(context, particlesRef.current, scorePopsRef.current, deltaMs, reducedMotionRef.current);
+        setPhase("level_cleared");
+        playTone(true);
+        if (navigator.vibrate) navigator.vibrate([24, 30, 34]);
+        safeTrack("level_complete", {
+          level: cleared.level,
+          target: cleared.target,
+          total_jays: simulation.stats.totalJays,
+        });
+        countdownTimersRef.current = [window.setTimeout(() => startNextLevelRef.current(), 950)];
+        return;
+      }
+      if (events.some((event) => event.type === "run_complete")) {
+        finishRun();
+        return;
+      }
+
+      setSecondsLeft(Math.max(0, Math.ceil((simulation.config.durationMs - simulation.elapsedMs) / 1000)));
       const shake = reducedMotionRef.current ? 0 : shakeRef.current * (simulation.width < 500 ? 2.2 : 1.4);
       context.setTransform(dpr, 0, 0, dpr, (Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
       drawBackground(context, simulation.width, simulation.height);
       simulation.jays.forEach((jay) => drawJay(context, jay, simulation.elapsedMs));
-      drawJeans(context, simulation, simulation.width, simulation.height, squashRef.current);
+      drawJeans(
+        context,
+        simulation,
+        simulation.width,
+        simulation.height,
+        squashRef.current,
+        simulation.elapsedMs,
+        directionWobbleRef.current,
+        goldenReactionRef.current,
+      );
       drawEffects(context, particlesRef.current, scorePopsRef.current, deltaMs, reducedMotionRef.current);
       squashRef.current *= 0.82;
       shakeRef.current *= 0.78;
+      directionWobbleRef.current *= 0.91;
+      goldenReactionRef.current *= 0.9;
       animationRef.current = window.requestAnimationFrame(renderGame);
     },
-    [finishRound, playTone],
+    [finishRun, playTone, setPhase],
   );
 
   const startPlaying = useCallback(
@@ -562,6 +687,10 @@ export function JaysGame() {
       }
       const simulation = simulationRef.current;
       if (!simulation) return;
+      setLevel(simulation.level);
+      setLevelProgress(simulation.levelProgress);
+      setLevelTarget(simulation.config.target);
+      setSecondsLeft(Math.max(0, Math.ceil((simulation.config.durationMs - simulation.elapsedMs) / 1000)));
       setPhase("playing");
       lastFrameRef.current = 0;
       const context = canvas.getContext("2d");
@@ -570,13 +699,32 @@ export function JaysGame() {
         context.setTransform(dpr, 0, 0, dpr, 0, 0);
         drawBackground(context, simulation.width, simulation.height);
         simulation.jays.forEach((jay) => drawJay(context, jay, simulation.elapsedMs));
-        drawJeans(context, simulation, simulation.width, simulation.height, 0);
+        drawJeans(context, simulation, simulation.width, simulation.height, 0, simulation.elapsedMs);
       }
       animationRef.current = window.requestAnimationFrame(renderGame);
       if (!resume) safeTrack("game_start");
     },
     [renderGame, setPhase],
   );
+
+  const startNextLevel = useCallback(() => {
+    const current = simulationRef.current;
+    if (!current || phaseRef.current !== "level_cleared") return;
+    particlesRef.current = [];
+    scorePopsRef.current = [];
+    simulationRef.current = createNextLevel(current);
+    if (document.hidden) {
+      const next = simulationRef.current;
+      setLevel(next.level);
+      setLevelProgress(0);
+      setLevelTarget(next.config.target);
+      setSecondsLeft(Math.ceil(next.config.durationMs / 1000));
+      setPhase("paused");
+      return;
+    }
+    startPlaying(true);
+  }, [setPhase, startPlaying]);
+  startNextLevelRef.current = startNextLevel;
 
   const beginCountdown = useCallback(
     (resume: boolean) => {
@@ -596,18 +744,39 @@ export function JaysGame() {
     (replay: boolean) => {
       unlockAudio();
       window.cancelAnimationFrame(animationRef.current ?? 0);
+      clearCountdownTimers();
+      simulationRef.current = undefined;
       particlesRef.current = [];
       scorePopsRef.current = [];
       pressedKeysRef.current.clear();
-      setScore(0);
-      setSecondsLeft(30);
+      squashRef.current = 0;
+      shakeRef.current = 0;
+      directionWobbleRef.current = 0;
+      goldenReactionRef.current = 0;
+      previousVelocitySignRef.current = 0;
+      leaderboardSessionRef.current = undefined;
+      leaderboardViewTrackedRef.current = false;
+      setLevel(1);
+      setLevelProgress(0);
+      setLevelTarget(5);
+      setSecondsLeft(12);
       setNewBest(false);
-      bestAtRoundStartRef.current = bestScore;
+      setLeaderboardAvailable(false);
+      setLeaderboardFeedback("");
+      setShareFeedback("");
+      bestAtRunStartRef.current = bestLevel;
       personalBestTrackedRef.current = false;
+      void createLeaderboardSession(board)
+        .then((session) => {
+          if (session.available && session.token) leaderboardSessionRef.current = session.token;
+        })
+        .catch(() => {
+          leaderboardSessionRef.current = undefined;
+        });
       if (replay) safeTrack("game_replay");
       beginCountdown(false);
     },
-    [beginCountdown, bestScore, unlockAudio],
+    [beginCountdown, bestLevel, board, clearCountdownTimers, unlockAudio],
   );
 
   const pauseGame = useCallback(() => {
@@ -634,6 +803,90 @@ export function JaysGame() {
     });
   }, []);
 
+  const changeLeaderboardPeriod = useCallback(
+    (period: LeaderboardPeriod) => {
+      setLeaderboardPeriod(period);
+      setLeaderboardLoading(true);
+      setLeaderboardFeedback("");
+      void getLeaderboard(board, period)
+        .then((response) => {
+          setLeaderboardEntries(response.entries);
+          setLeaderboardAvailable(response.available);
+        })
+        .catch(() => {
+          setLeaderboardEntries([]);
+          setLeaderboardFeedback("The leaderboard is having a lie-down. Your score is safe locally.");
+        })
+        .finally(() => setLeaderboardLoading(false));
+    },
+    [board],
+  );
+
+  const submitScore = useCallback(
+    async (event: React.FormEvent<HTMLFormElement>) => {
+      event.preventDefault();
+      const validated = validateNickname(nickname);
+      if (!validated.ok) {
+        setLeaderboardFeedback(validated.error);
+        return;
+      }
+      const token = leaderboardSessionRef.current;
+      if (!token) {
+        setLeaderboardFeedback("This round couldn’t be verified. Play again to try another submission.");
+        safeTrack("leaderboard_submit_fail", { board, highest_level: finalStats.highestLevel });
+        return;
+      }
+      setSubmittingScore(true);
+      setLeaderboardFeedback("");
+      try {
+        const response = await submitLeaderboardScore({
+          board,
+          nickname: validated.nickname,
+          highestLevel: finalStats.highestLevel,
+          progress: finalStats.progress,
+          target: finalStats.target,
+          totalJays: finalStats.totalJays,
+          goldenJays: finalStats.goldenCatches,
+          misses: finalStats.misses,
+          token,
+        });
+        leaderboardSessionRef.current = undefined;
+        setNickname(validated.nickname);
+        setLeaderboardPeriod("today");
+        setLeaderboardEntries(response.entries);
+        setLeaderboardFeedback("You’re on the board!");
+        safeTrack("leaderboard_submit_success", { board, highest_level: finalStats.highestLevel });
+      } catch {
+        setLeaderboardFeedback("Couldn’t submit that score. You can still play again instantly.");
+        safeTrack("leaderboard_submit_fail", { board, highest_level: finalStats.highestLevel });
+      } finally {
+        setSubmittingScore(false);
+      }
+    },
+    [board, finalStats, nickname],
+  );
+
+  const shareScore = useCallback(async () => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("board", board);
+    const shareData = {
+      title: "Jays for Jeans",
+      text: `I reached Level ${finalStats.highestLevel} with ${finalStats.totalJays} Jays in jeans. Beat that on the ${boardLabel(board)} board.`,
+      url: url.toString(),
+    };
+    try {
+      if (navigator.share) {
+        await navigator.share(shareData);
+        setShareFeedback("Score shared!");
+      } else {
+        await navigator.clipboard.writeText(`${shareData.text} ${shareData.url}`);
+        setShareFeedback("Score link copied!");
+      }
+    } catch {
+      setShareFeedback("");
+    }
+  }, [board, finalStats.highestLevel, finalStats.totalJays]);
+
   const pointerX = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
     const simulation = simulationRef.current;
     const canvas = canvasRef.current;
@@ -657,9 +910,12 @@ export function JaysGame() {
 
   useEffect(() => {
     reducedMotionRef.current = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    setBoard(sanitizeBoardId(new URLSearchParams(window.location.search).get("board")));
     try {
-      const storedBest = Number.parseInt(localStorage.getItem(BEST_SCORE_KEY) || "0", 10);
-      if (Number.isFinite(storedBest) && storedBest > 0) setBestScore(storedBest);
+      const storedBest = JSON.parse(localStorage.getItem(BEST_RUN_KEY) || "null") as StoredBestRun | null;
+      if (storedBest?.version === 2 && Number.isInteger(storedBest.highestLevel) && storedBest.highestLevel > 0) {
+        setBestLevel(storedBest.highestLevel);
+      }
       setMutedState(localStorage.getItem(MUTED_KEY) === "true");
     } catch {
       // The game remains fully playable without browser storage.
@@ -670,6 +926,34 @@ export function JaysGame() {
     if (stageRef.current) observer.observe(stageRef.current);
     return () => observer.disconnect();
   }, [syncCanvasSize]);
+
+  useEffect(() => {
+    if (phase !== "results") return;
+    let active = true;
+    setLeaderboardLoading(true);
+    setLeaderboardPeriod("today");
+    setLeaderboardFeedback("");
+    void getLeaderboardStatus(board)
+      .then(async (status) => {
+        if (!active || !status.available) return;
+        setLeaderboardAvailable(true);
+        if (!leaderboardViewTrackedRef.current) {
+          leaderboardViewTrackedRef.current = true;
+          safeTrack("leaderboard_view", { board });
+        }
+        const response = await getLeaderboard(board, "today");
+        if (active) setLeaderboardEntries(response.entries);
+      })
+      .catch(() => {
+        if (active) setLeaderboardAvailable(false);
+      })
+      .finally(() => {
+        if (active) setLeaderboardLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [board, phase]);
 
   useEffect(() => {
     const handleVisibility = () => {
@@ -727,17 +1011,20 @@ export function JaysGame() {
           {muted ? <VolumeX aria-hidden="true" /> : <Volume2 aria-hidden="true" />}
         </button>
 
-        {(phase === "playing" || phase === "paused" || phase === "countdown") && (
+        {(phase === "playing" || phase === "paused" || phase === "countdown" || phase === "level_cleared") && (
           <div className="game-hud" aria-live="polite">
-            <div className="hud-score">
-              <span>SCORE</span>
-              <strong>{score}</strong>
-              {newBest && <em>NEW BEST!</em>}
+            <div className="hud-level">
+              <span>LEVEL</span>
+              <strong>{level}</strong>
             </div>
-            <img src="/jaysforjeans-logo.png" alt="Jays for Jeans" className="hud-logo" />
-            <div className={`hud-timer ${secondsLeft <= 7 ? "hud-timer--urgent" : ""}`}>
+            <div className={`hud-progress ${levelTarget - levelProgress === 1 ? "hud-progress--one-left" : ""}`}>
+              <img src="/jaysforjeans-logo.png" alt="Jays for Jeans" className="hud-logo" />
+              <strong>{Math.min(levelProgress, levelTarget)} <small>/</small> {levelTarget}</strong>
+              <span>{levelTarget - levelProgress === 1 ? "ONE JAY LEFT" : "JAYS"}</span>
+            </div>
+            <div className={`hud-timer ${secondsLeft <= 4 ? "hud-timer--urgent" : ""}`}>
               <span>TIME</span>
-              <strong>{secondsLeft}</strong>
+              <strong>00:{String(secondsLeft).padStart(2, "0")}</strong>
             </div>
           </div>
         )}
@@ -747,14 +1034,14 @@ export function JaysGame() {
             <img src="/jaysforjeans-logo.png" alt="Jays for Jeans" className="hero-logo" />
             <div className="intro-copy">
               <p className="eyebrow">A highly scientific trouser challenge</p>
-              <h1>HOW MANY JAYS<br />CAN YOU GET INTO JEANS?</h1>
-              <p className="instruction">Catch as many Jays as you can.</p>
+              <h1>HOW MANY LEVELS<br />CAN YOUR JEANS SURVIVE?</h1>
+              <p className="instruction">Hit each Jay target before time runs out.</p>
             </div>
             <button className="arcade-button" type="button" onClick={() => startRound(false)}>
               <Play fill="currentColor" aria-hidden="true" />
               PLAY
             </button>
-            {bestScore > 0 && <p className="best-line">PERSONAL BEST <strong>{bestScore}</strong></p>}
+            {bestLevel > 0 && <p className="best-line">BEST LEVEL <strong>{bestLevel}</strong></p>}
             <p className="control-hint">Drag anywhere to move the jeans</p>
           </div>
         )}
@@ -762,6 +1049,16 @@ export function JaysGame() {
         {phase === "countdown" && (
           <div className="countdown-overlay" aria-live="assertive">
             <span key={countdown}>{countdown}</span>
+          </div>
+        )}
+
+        {phase === "level_cleared" && (
+          <div className="level-cleared-overlay" aria-live="assertive">
+            <div>
+              <p>LEVEL {level}</p>
+              <h2>LEVEL CLEARED</h2>
+              <strong>{levelTarget} / {levelTarget} JAYS</strong>
+            </div>
           </div>
         )}
 
@@ -784,18 +1081,86 @@ export function JaysGame() {
             <img src="/jaysforjeans-logo.png" alt="Jays for Jeans" className="result-logo" />
             <div className="result-card">
               {newBest && <p className="new-best-banner">NEW PERSONAL BEST!</p>}
-              <p className="result-number">{finalStats.score}</p>
-              <h1>{finalStats.score === 1 ? "JAY IN JEANS" : "JAYS IN JEANS"}</h1>
-              <p className="result-message">{resultMessage(finalStats.score)}</p>
+              <p className="result-kicker">YOU REACHED</p>
+              <p className="result-number">LEVEL {finalStats.highestLevel}</p>
+              <h1>{finalStats.totalJays} {finalStats.totalJays === 1 ? "JAY" : "JAYS"} IN JEANS</h1>
+              <p className="result-progress">{finalStats.progress} / {finalStats.target} on Level {finalStats.highestLevel}</p>
+              <p className="result-message">{resultMessage(finalStats.highestLevel)}</p>
               <div className="result-stats" aria-label="Round statistics">
-                <span><strong>{finalStats.normalCatches + finalStats.goldenCatches}</strong> caught</span>
+                <span><strong>{finalStats.totalJays}</strong> total Jays</span>
+                <span><strong>{finalStats.goldenCatches}</strong> golden</span>
                 <span><strong>{finalStats.misses}</strong> missed</span>
-                <span><strong>{bestScore}</strong> best</span>
               </div>
               <button className="arcade-button" type="button" onClick={() => startRound(true)}>
                 <Play fill="currentColor" aria-hidden="true" />
                 PLAY AGAIN
               </button>
+              <button className="share-button" type="button" onClick={shareScore}>
+                <Share2 aria-hidden="true" />
+                SHARE SCORE
+              </button>
+              {shareFeedback && <p className="share-feedback" aria-live="polite">{shareFeedback}</p>}
+
+              {leaderboardAvailable && (
+                <section className="leaderboard-panel" aria-label={`${boardLabel(board)} leaderboard`}>
+                  <div className="leaderboard-heading">
+                    <div>
+                      <p><Trophy aria-hidden="true" /> TODAY&apos;S TOP JAYS</p>
+                      <span><MapPin aria-hidden="true" /> {boardLabel(board)}</span>
+                    </div>
+                  </div>
+                  <div className="leaderboard-tabs" role="tablist" aria-label="Leaderboard period">
+                    {(["today", "week", "all"] as LeaderboardPeriod[]).map((period) => (
+                      <button
+                        key={period}
+                        type="button"
+                        role="tab"
+                        aria-selected={leaderboardPeriod === period}
+                        className={leaderboardPeriod === period ? "is-active" : ""}
+                        onClick={() => changeLeaderboardPeriod(period)}
+                      >
+                        {period === "today" ? "Today" : period === "week" ? "This Week" : "All Time"}
+                      </button>
+                    ))}
+                  </div>
+                  <ol className="leaderboard-list" aria-live="polite">
+                    {leaderboardLoading ? (
+                      <li className="leaderboard-empty">Checking the waistband records…</li>
+                    ) : leaderboardEntries.length ? (
+                      leaderboardEntries.map((entry) => (
+                        <li key={`${entry.rank}-${entry.nickname}-${entry.createdAt}`}>
+                          <span className="leaderboard-rank">{entry.rank}</span>
+                          <strong>{entry.nickname}</strong>
+                          <b><span>LV {entry.highestLevel}</span><small>{entry.progress}/{entry.target} · {entry.totalJays} Jays</small></b>
+                        </li>
+                      ))
+                    ) : (
+                      <li className="leaderboard-empty">No scores yet. You could be first.</li>
+                    )}
+                  </ol>
+                  <form className="leaderboard-form" onSubmit={submitScore}>
+                    <label htmlFor="leaderboard-nickname">Put this score on the board (optional)</label>
+                    <div>
+                      <input
+                        id="leaderboard-nickname"
+                        type="text"
+                        value={nickname}
+                        onChange={(event) => setNickname(event.target.value)}
+                        maxLength={16}
+                        autoComplete="off"
+                        placeholder="Nickname"
+                        aria-describedby="leaderboard-feedback"
+                      />
+                      <button type="submit" disabled={submittingScore} aria-label="Submit score">
+                        <Send aria-hidden="true" />
+                      </button>
+                    </div>
+                  </form>
+                  <p id="leaderboard-feedback" className="leaderboard-feedback" aria-live="polite">
+                    {leaderboardFeedback}
+                  </p>
+                </section>
+              )}
             </div>
           </div>
         )}
