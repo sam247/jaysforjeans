@@ -1,15 +1,19 @@
 "use client";
 
 import { track } from "@vercel/analytics";
-import { MapPin, Pause, Play, Send, Share2, Trophy, Volume2, VolumeX } from "lucide-react";
+import { ChevronLeft, MapPin, Pause, Play, Send, Share2, Trophy, Volume2, VolumeX } from "lucide-react";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   LEVEL_DURATION_MS,
+  LEVEL_CLEAR_HOLD_MS,
   clampPlayerX,
   createNextLevel,
   createSimulation,
+  getRestingPlayerY,
   getPlayerSize,
+  getNextLevelTransition,
+  getTouchPlayerY,
   resizeSimulation,
   resultMessage,
   updateSimulation,
@@ -264,15 +268,15 @@ function drawJeans(
     .filter((jay) => jay.status === "falling")
     .reduce<Jay | undefined>((nearest, jay) => {
       if (!nearest) return jay;
-      const targetY = height - size.height;
+      const targetY = simulation.playerY;
       return Math.abs(jay.y - targetY) < Math.abs(nearest.y - targetY) ? jay : nearest;
     }, undefined);
   const approachDistance = nearestJay
-    ? Math.hypot(nearestJay.x - x, nearestJay.y - (height - size.height))
+    ? Math.hypot(nearestJay.x - x, nearestJay.y - (simulation?.playerY ?? height - size.height))
     : Number.POSITIVE_INFINITY;
   const proximityFlex = Math.max(0, Math.min(1, 1 - approachDistance / Math.max(150, height * 0.22)));
   const idleBounce = Math.sin(elapsedMs * 0.006) * 2.2;
-  const y = height - size.height + 12 + idleBounce;
+  const y = (simulation?.playerY ?? height - size.height + 12) + idleBounce;
   const lean = simulation ? Math.max(-0.08, Math.min(0.08, simulation.playerVelocity * 0.24)) : 0;
   const denim = context.createLinearGradient(0, y, 0, y + size.height);
   denim.addColorStop(0, "#3479b7");
@@ -431,6 +435,7 @@ export function JaysGame() {
 
   const [phase, setPhaseState] = useState<GamePhase>("intro");
   const [countdown, setCountdown] = useState("3");
+  const [countdownLabel, setCountdownLabel] = useState<string>();
   const [level, setLevel] = useState(1);
   const [levelProgress, setLevelProgress] = useState(0);
   const [levelTarget, setLevelTarget] = useState(5);
@@ -440,6 +445,7 @@ export function JaysGame() {
   const [muted, setMutedState] = useState(false);
   const [board, setBoard] = useState<BoardId>(DEFAULT_BOARD_ID);
   const [leaderboardAvailable, setLeaderboardAvailable] = useState(false);
+  const [showIntroLeaderboard, setShowIntroLeaderboard] = useState(false);
   const [leaderboardPeriod, setLeaderboardPeriod] = useState<LeaderboardPeriod>("today");
   const [leaderboardEntries, setLeaderboardEntries] = useState<LeaderboardEntry[]>([]);
   const [leaderboardLoading, setLeaderboardLoading] = useState(false);
@@ -643,7 +649,7 @@ export function JaysGame() {
           target: cleared.target,
           total_jays: simulation.stats.totalJays,
         });
-        countdownTimersRef.current = [window.setTimeout(() => startNextLevelRef.current(), 950)];
+        countdownTimersRef.current = [window.setTimeout(() => startNextLevelRef.current(), LEVEL_CLEAR_HOLD_MS)];
         return;
       }
       if (events.some((event) => event.type === "run_complete")) {
@@ -691,6 +697,7 @@ export function JaysGame() {
       setLevelProgress(simulation.levelProgress);
       setLevelTarget(simulation.config.target);
       setSecondsLeft(Math.max(0, Math.ceil((simulation.config.durationMs - simulation.elapsedMs) / 1000)));
+      setCountdownLabel(undefined);
       setPhase("playing");
       lastFrameRef.current = 0;
       const context = canvas.getContext("2d");
@@ -713,23 +720,32 @@ export function JaysGame() {
     particlesRef.current = [];
     scorePopsRef.current = [];
     simulationRef.current = createNextLevel(current);
+    const next = simulationRef.current;
+    setLevel(next.level);
+    setLevelProgress(0);
+    setLevelTarget(next.config.target);
+    setSecondsLeft(Math.ceil(next.config.durationMs / 1000));
     if (document.hidden) {
-      const next = simulationRef.current;
-      setLevel(next.level);
-      setLevelProgress(0);
-      setLevelTarget(next.config.target);
-      setSecondsLeft(Math.ceil(next.config.durationMs / 1000));
       setPhase("paused");
       return;
     }
-    startPlaying(true);
-  }, [setPhase, startPlaying]);
+    clearCountdownTimers();
+    const transition = getNextLevelTransition(next.level);
+    setCountdownLabel(transition.label);
+    setCountdown(transition.steps[0].value);
+    setPhase("countdown");
+    countdownTimersRef.current = [
+      ...transition.steps.slice(1).map((step) => window.setTimeout(() => setCountdown(step.value), step.delayMs)),
+      window.setTimeout(() => startPlaying(true), transition.playDelayMs),
+    ];
+  }, [clearCountdownTimers, setPhase, startPlaying]);
   startNextLevelRef.current = startNextLevel;
 
   const beginCountdown = useCallback(
     (resume: boolean) => {
       clearCountdownTimers();
       setPhase("countdown");
+      setCountdownLabel(resume ? "RESUMING IN" : undefined);
       setCountdown("3");
       countdownTimersRef.current = [
         window.setTimeout(() => setCountdown("2"), 400),
@@ -762,6 +778,7 @@ export function JaysGame() {
       setSecondsLeft(12);
       setNewBest(false);
       setLeaderboardAvailable(false);
+      setShowIntroLeaderboard(false);
       setLeaderboardFeedback("");
       setShareFeedback("");
       bestAtRunStartRef.current = bestLevel;
@@ -887,25 +904,42 @@ export function JaysGame() {
     }
   }, [board, finalStats.highestLevel, finalStats.totalJays]);
 
-  const pointerX = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
+  const updatePointerPosition = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
     const simulation = simulationRef.current;
     const canvas = canvasRef.current;
     if (!simulation || !canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const x = event.clientX - rect.left;
+    const coalescedEvents = event.nativeEvent.getCoalescedEvents?.();
+    const latestEvent = coalescedEvents?.[coalescedEvents.length - 1] ?? event.nativeEvent;
+    const x = latestEvent.clientX - rect.left;
     const playerWidth = getPlayerSize(simulation.width).width;
     simulation.playerTargetX = clampPlayerX(x, simulation.width, playerWidth);
+    if (event.pointerType === "touch" || event.pointerType === "pen") {
+      const y = latestEvent.clientY - rect.top;
+      simulation.playerY = getTouchPlayerY(y, simulation.width, simulation.height);
+      simulation.playerTargetY = simulation.playerY;
+    }
+  }, []);
+
+  const releasePointer = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
+    const simulation = simulationRef.current;
+    if (simulation && (event.pointerType === "touch" || event.pointerType === "pen")) {
+      simulation.playerTargetY = getRestingPlayerY(simulation.width, simulation.height);
+    }
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
   }, []);
 
   const handlePointerDown = useCallback(
     (event: React.PointerEvent<HTMLCanvasElement>) => {
       if (phaseRef.current !== "playing") return;
       event.currentTarget.setPointerCapture(event.pointerId);
-      pointerX(event);
+      updatePointerPosition(event);
       const simulation = simulationRef.current;
       if (simulation) simulation.playerX = simulation.playerTargetX;
     },
-    [pointerX],
+    [updatePointerPosition],
   );
 
   useEffect(() => {
@@ -928,15 +962,21 @@ export function JaysGame() {
   }, [syncCanvasSize]);
 
   useEffect(() => {
-    if (phase !== "results") return;
+    if (phase !== "intro" && phase !== "results") return;
     let active = true;
-    setLeaderboardLoading(true);
-    setLeaderboardPeriod("today");
-    setLeaderboardFeedback("");
+    if (phase === "results") {
+      setLeaderboardLoading(true);
+      setLeaderboardPeriod("today");
+      setLeaderboardFeedback("");
+    }
     void getLeaderboardStatus(board)
       .then(async (status) => {
-        if (!active || !status.available) return;
+        if (!active || !status.available) {
+          if (active) setLeaderboardAvailable(false);
+          return;
+        }
         setLeaderboardAvailable(true);
+        setLeaderboardLoading(true);
         if (!leaderboardViewTrackedRef.current) {
           leaderboardViewTrackedRef.current = true;
           safeTrack("leaderboard_view", { board });
@@ -1002,9 +1042,11 @@ export function JaysGame() {
           onPointerDown={handlePointerDown}
           onPointerMove={(event) => {
             if (phaseRef.current === "playing" && event.currentTarget.hasPointerCapture(event.pointerId)) {
-              pointerX(event);
+              updatePointerPosition(event);
             }
           }}
+          onPointerUp={releasePointer}
+          onPointerCancel={releasePointer}
         />
 
         <button className="sound-button" type="button" onClick={toggleMuted} aria-label={muted ? "Turn sound on" : "Mute sound"}>
@@ -1041,13 +1083,58 @@ export function JaysGame() {
               <Play fill="currentColor" aria-hidden="true" />
               PLAY
             </button>
+            {leaderboardAvailable && (
+              <button className="share-button intro-leaderboard-button" type="button" onClick={() => setShowIntroLeaderboard(true)}>
+                <Trophy aria-hidden="true" />
+                VIEW LEADERBOARD
+              </button>
+            )}
             {bestLevel > 0 && <p className="best-line">BEST LEVEL <strong>{bestLevel}</strong></p>}
-            <p className="control-hint">Drag anywhere to move the jeans</p>
+            <p className="control-hint">Drag anywhere — the jeans sit above your thumb</p>
+          </div>
+        )}
+
+        {phase === "intro" && showIntroLeaderboard && (
+          <div className="screen screen--leaderboard">
+            <section className="leaderboard-panel leaderboard-panel--standalone" aria-label={`${boardLabel(board)} leaderboard`}>
+              <button className="leaderboard-back" type="button" onClick={() => setShowIntroLeaderboard(false)}>
+                <ChevronLeft aria-hidden="true" /> BACK
+              </button>
+              <div className="leaderboard-heading">
+                <div>
+                  <p><Trophy aria-hidden="true" /> TOP JAYS</p>
+                  <span><MapPin aria-hidden="true" /> {boardLabel(board)}</span>
+                </div>
+              </div>
+              <div className="leaderboard-tabs" role="tablist" aria-label="Leaderboard period">
+                {(["today", "week", "all"] as LeaderboardPeriod[]).map((period) => (
+                  <button key={period} type="button" role="tab" aria-selected={leaderboardPeriod === period} className={leaderboardPeriod === period ? "is-active" : ""} onClick={() => changeLeaderboardPeriod(period)}>
+                    {period === "today" ? "Today" : period === "week" ? "This Week" : "All Time"}
+                  </button>
+                ))}
+              </div>
+              <ol className="leaderboard-list" aria-live="polite">
+                {leaderboardLoading ? (
+                  <li className="leaderboard-empty">Checking the waistband records…</li>
+                ) : leaderboardEntries.length ? (
+                  leaderboardEntries.map((entry) => (
+                    <li key={`${entry.rank}-${entry.nickname}-${entry.createdAt}`}>
+                      <span className="leaderboard-rank">{entry.rank}</span>
+                      <strong>{entry.nickname}</strong>
+                      <b><span>LV {entry.highestLevel}</span><small>{entry.progress}/{entry.target} · {entry.totalJays} Jays</small></b>
+                    </li>
+                  ))
+                ) : (
+                  <li className="leaderboard-empty">No scores yet. You could be first.</li>
+                )}
+              </ol>
+            </section>
           </div>
         )}
 
         {phase === "countdown" && (
           <div className="countdown-overlay" aria-live="assertive">
+            {countdownLabel && <p>{countdownLabel}</p>}
             <span key={countdown}>{countdown}</span>
           </div>
         )}

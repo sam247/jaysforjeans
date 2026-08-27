@@ -1,5 +1,8 @@
 export const LEVEL_DURATION_MS = 12_000;
+export const LEVEL_CLEAR_HOLD_MS = 1_050;
+export const NEXT_LEVEL_COUNTDOWN_STEP_MS = 450;
 export const TOUCH_LAG_CAP_PX = 14;
+export const TOUCH_THUMB_GAP_PX = 28;
 export const MAX_VALIDATED_LEVEL = 999;
 
 export type GamePhase = "intro" | "countdown" | "playing" | "paused" | "level_cleared" | "results";
@@ -55,6 +58,8 @@ export type GameSimulation = {
   nextId: number;
   playerX: number;
   playerTargetX: number;
+  playerY: number;
+  playerTargetY: number;
   playerVelocity: number;
   jays: Jay[];
   stats: RunStats;
@@ -71,6 +76,19 @@ export type GameEvent =
   | { type: "run_complete" };
 
 export type RandomSource = () => number;
+
+export function getNextLevelTransition(level: number) {
+  const nextLevel = Math.max(2, Math.floor(level));
+  return {
+    label: `LEVEL ${nextLevel} STARTING IN`,
+    steps: [
+      { value: "3", delayMs: 0 },
+      { value: "2", delayMs: NEXT_LEVEL_COUNTDOWN_STEP_MS },
+      { value: "1", delayMs: NEXT_LEVEL_COUNTDOWN_STEP_MS * 2 },
+    ],
+    playDelayMs: NEXT_LEVEL_COUNTDOWN_STEP_MS * 3,
+  } as const;
+}
 
 const mix = (from: number, to: number, amount: number) => from + (to - from) * amount;
 const clamp = (value: number, minimum: number, maximum: number) => Math.min(maximum, Math.max(minimum, value));
@@ -132,6 +150,21 @@ export function clampPlayerX(x: number, width: number, playerWidth: number) {
   return clamp(x, half + 8, width - half - 8);
 }
 
+export function getRestingPlayerY(width: number, height: number) {
+  return height - getPlayerSize(width).height + 12;
+}
+
+export function clampPlayerY(y: number, width: number, height: number) {
+  const restingY = getRestingPlayerY(width, height);
+  const verticalTravel = clamp(height * 0.18, 96, 150);
+  return clamp(y, restingY - verticalTravel, restingY);
+}
+
+export function getTouchPlayerY(pointerY: number, width: number, height: number) {
+  const playerHeight = getPlayerSize(width).height;
+  return clampPlayerY(pointerY - playerHeight - TOUCH_THUMB_GAP_PX, width, height);
+}
+
 export function applyTouchPosition(currentX: number, targetX: number, width: number, playerWidth: number, deltaMs: number) {
   const target = clampPlayerX(targetX, width, playerWidth);
   const responsiveness = 1 - Math.exp(-Math.min(deltaMs, 34) * 0.055);
@@ -184,7 +217,9 @@ export function createSimulation(width: number, height: number, random: RandomSo
     : { highestLevel: level, progress: 0, target: config.target, totalJays: 0, normalCatches: 0, goldenCatches: 0, misses: 0 };
   const simulation: GameSimulation = {
     width, height, level, config, levelProgress: 0, elapsedMs: 0, spawnAccumulatorMs: 0,
-    nextId: 1, playerX: width / 2, playerTargetX: width / 2, playerVelocity: 0, jays: [], stats,
+    nextId: 1, playerX: width / 2, playerTargetX: width / 2,
+    playerY: getRestingPlayerY(width, height), playerTargetY: getRestingPlayerY(width, height),
+    playerVelocity: 0, jays: [], stats,
     goldenDueMs: mix(level >= 6 ? 4_200 : 7_200, level >= 6 ? 7_400 : 10_200, random()),
     goldenSpawnCount: 0, lastSpawnX: width / 2 - player.width, ended: false,
   };
@@ -196,6 +231,8 @@ export function createNextLevel(simulation: GameSimulation, random: RandomSource
   const next = createSimulation(simulation.width, simulation.height, random, simulation.level + 1, simulation.stats);
   next.playerX = clampPlayerX(simulation.playerX, next.width, getPlayerSize(next.width).width);
   next.playerTargetX = next.playerX;
+  next.playerY = clampPlayerY(simulation.playerY, next.width, next.height);
+  next.playerTargetY = next.playerY;
   return next;
 }
 
@@ -206,6 +243,8 @@ export function resizeSimulation(simulation: GameSimulation, width: number, heig
   simulation.height = height;
   simulation.playerX *= scaleX;
   simulation.playerTargetX *= scaleX;
+  simulation.playerY = clampPlayerY(simulation.playerY * scaleY, width, height);
+  simulation.playerTargetY = clampPlayerY(simulation.playerTargetY * scaleY, width, height);
   simulation.lastSpawnX *= scaleX;
   simulation.jays.forEach((jay) => {
     jay.x *= scaleX; jay.y *= scaleY;
@@ -230,6 +269,8 @@ export function updateSimulation(simulation: GameSimulation, deltaMs: number, ra
   const playerSize = getPlayerSize(simulation.width);
   const previousPlayerX = simulation.playerX;
   simulation.playerX = applyTouchPosition(simulation.playerX, simulation.playerTargetX, simulation.width, playerSize.width, dt);
+  const verticalResponsiveness = 1 - Math.exp(-dt * 0.02);
+  simulation.playerY += (clampPlayerY(simulation.playerTargetY, simulation.width, simulation.height) - simulation.playerY) * verticalResponsiveness;
   simulation.playerVelocity = dt > 0 ? (simulation.playerX - previousPlayerX) / dt : 0;
 
   simulation.spawnAccumulatorMs += dt;
@@ -241,7 +282,7 @@ export function updateSimulation(simulation: GameSimulation, deltaMs: number, ra
     simulation.jays.push(makeJay(simulation, random, kind));
   }
 
-  const waistY = simulation.height - playerSize.height + 12;
+  const waistY = simulation.playerY;
   const surviving: Jay[] = [];
   for (const jay of simulation.jays) {
     if (jay.status === "caught") {

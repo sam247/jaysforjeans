@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { JaysGame } from "@/components/jays-game";
 
 const trackMock = vi.hoisted(() => vi.fn());
+const leaderboardStatusMock = vi.hoisted(() => vi.fn());
+const getLeaderboardMock = vi.hoisted(() => vi.fn());
 vi.mock("@vercel/analytics", () => ({ track: trackMock }));
 vi.mock("@/lib/leaderboard", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/leaderboard")>();
@@ -15,11 +17,8 @@ vi.mock("@/lib/leaderboard", async (importOriginal) => {
       board: "surrey-quays" as const,
       boardLabel: "Surrey Quays",
     }),
-    getLeaderboardStatus: async () => ({
-      available: false,
-      board: "surrey-quays" as const,
-      boardLabel: "Surrey Quays",
-    }),
+    getLeaderboardStatus: leaderboardStatusMock,
+    getLeaderboard: getLeaderboardMock,
   };
 });
 
@@ -32,6 +31,18 @@ describe("JaysGame", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     trackMock.mockClear();
+    leaderboardStatusMock.mockResolvedValue({
+      available: false,
+      board: "surrey-quays" as const,
+      boardLabel: "Surrey Quays",
+    });
+    getLeaderboardMock.mockResolvedValue({
+      available: true,
+      board: "surrey-quays" as const,
+      boardLabel: "Surrey Quays",
+      period: "today",
+      entries: [],
+    });
     localStorage.clear();
     vi.stubGlobal("ResizeObserver", ResizeObserverMock);
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
@@ -53,6 +64,25 @@ describe("JaysGame", () => {
     expect(screen.getByRole("heading", { name: /how many levels/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^play$/i })).toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  });
+
+  it("offers leaderboard access before playing when rankings are configured", async () => {
+    leaderboardStatusMock.mockResolvedValue({
+      available: true,
+      board: "surrey-quays" as const,
+      boardLabel: "Surrey Quays",
+    });
+    render(<JaysGame />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const leaderboardButton = screen.getByRole("button", { name: /view leaderboard/i });
+    fireEvent.click(leaderboardButton);
+
+    expect(screen.getByRole("region", { name: /surrey quays leaderboard/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /back/i })).toBeInTheDocument();
   });
 
   it("runs the short countdown and enters the playable HUD", () => {
@@ -82,11 +112,14 @@ describe("JaysGame", () => {
     expect(screen.getByRole("button", { name: /resume/i })).toBeInTheDocument();
   });
 
-  it("loads the local personal best and persists mute preference", () => {
+  it("loads the local personal best and persists mute preference", async () => {
     localStorage.setItem("jaysforjeans.personalBest.v2", JSON.stringify({
       version: 2, highestLevel: 7, totalJays: 68, date: "2026-08-26T00:00:00.000Z",
     }));
     render(<JaysGame />);
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     expect(screen.getByText("7")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Mute sound" }));

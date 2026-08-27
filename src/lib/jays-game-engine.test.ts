@@ -3,12 +3,15 @@ import { describe, expect, it } from "vitest";
 import {
   LEVEL_DURATION_MS,
   TOUCH_LAG_CAP_PX,
+  TOUCH_THUMB_GAP_PX,
   applyTouchPosition,
   createNextLevel,
   createSimulation,
   getLevelConfig,
   getLevelTarget,
+  getNextLevelTransition,
   getPlayerSize,
+  getTouchPlayerY,
   maximumRunJays,
   minimumRunJays,
   resultMessage,
@@ -21,8 +24,7 @@ import {
 const fixedRandom = (value = 0.5) => () => value;
 
 function catchJay(simulation: GameSimulation, kind: JayKind = "normal") {
-  const playerSize = getPlayerSize(simulation.width);
-  const waistY = simulation.height - playerSize.height + 12;
+  const waistY = simulation.playerY;
   const jay: Jay = {
     id: simulation.nextId++, kind, status: "falling", variant: 0,
     x: simulation.playerX, y: waistY, radius: kind === "golden" ? 20 : 22,
@@ -69,6 +71,16 @@ describe("jays survival engine", () => {
     const target = 300;
     const next = applyTouchPosition(80, target, width, getPlayerSize(width).width, 16);
     expect(target - next).toBeLessThanOrEqual(TOUCH_LAG_CAP_PX);
+  });
+
+  it("keeps the jeans visible above a bottom touch and moves the real catch line", () => {
+    const simulation = createSimulation(390, 760, fixedRandom());
+    const playerHeight = getPlayerSize(simulation.width).height;
+    simulation.playerY = getTouchPlayerY(752, simulation.width, simulation.height);
+    simulation.playerTargetY = simulation.playerY;
+
+    expect(752 - (simulation.playerY + playerHeight)).toBeGreaterThanOrEqual(TOUCH_THUMB_GAP_PX);
+    expect(catchJay(simulation)).toContainEqual(expect.objectContaining({ type: "catch" }));
   });
 
   it("counts a Golden Jay as five towards the level target", () => {
@@ -134,5 +146,17 @@ describe("jays survival engine", () => {
     expect(resultMessage(1)).toBe("The jeans needed warming up.");
     expect(resultMessage(6)).toBe("Surrey Quays is taking notes.");
     expect(resultMessage(12)).toBe("Someone inspect those trousers.");
+  });
+
+  it("describes an explicit 3, 2, 1 transition into the next level", () => {
+    expect(getNextLevelTransition(8)).toEqual({
+      label: "LEVEL 8 STARTING IN",
+      steps: [
+        { value: "3", delayMs: 0 },
+        { value: "2", delayMs: 450 },
+        { value: "1", delayMs: 900 },
+      ],
+      playDelayMs: 1_350,
+    });
   });
 });
