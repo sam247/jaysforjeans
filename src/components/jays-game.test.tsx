@@ -4,10 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { JaysGame } from "@/components/jays-game";
 
-const trackMock = vi.hoisted(() => vi.fn());
+const trackGameEventMock = vi.hoisted(() => vi.fn());
 const leaderboardStatusMock = vi.hoisted(() => vi.fn());
 const getLeaderboardMock = vi.hoisted(() => vi.fn());
-vi.mock("@vercel/analytics", () => ({ track: trackMock }));
+vi.mock("@/lib/analytics", () => ({ trackGameEvent: trackGameEventMock }));
 vi.mock("next/link", () => ({
   default: ({ children, href, ...props }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }) => (
     <a href={href} {...props}>{children}</a>
@@ -35,7 +35,7 @@ class ResizeObserverMock {
 describe("JaysGame", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    trackMock.mockClear();
+    trackGameEventMock.mockClear();
     leaderboardStatusMock.mockResolvedValue({
       available: false,
       board: "surrey-quays" as const,
@@ -144,7 +144,27 @@ describe("JaysGame", () => {
     fireEvent.click(screen.getByRole("button", { name: /resume/i }));
     act(() => vi.advanceTimersByTime(1200));
 
-    expect(trackMock.mock.calls.filter(([name]) => name === "game_start")).toHaveLength(1);
+    expect(trackGameEventMock.mock.calls.filter(([name]) => name === "game_start")).toHaveLength(1);
+  });
+
+  it("tracks leaderboard_view once with board and period when configured", async () => {
+    leaderboardStatusMock.mockResolvedValue({
+      available: true,
+      board: "surrey-quays" as const,
+      boardLabel: "Surrey Quays",
+    });
+    render(<JaysGame />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(trackGameEventMock).toHaveBeenCalledWith(
+      "leaderboard_view",
+      { board: "surrey-quays" },
+      { board: "surrey-quays", period: "today" },
+    );
+    expect(trackGameEventMock.mock.calls.filter(([name]) => name === "leaderboard_view")).toHaveLength(1);
   });
 
   it("does not reserve A or D while the player is typing", () => {

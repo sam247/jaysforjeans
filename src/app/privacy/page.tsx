@@ -14,7 +14,7 @@ export default function PrivacyPage() {
         <Link className="privacy-home" href="/">← Back to the game</Link>
         <img className="privacy-logo" src="/jaysforjeans-logo.png" alt="Jays for Jeans" />
         <h1>PRIVACY</h1>
-        <p className="privacy-updated">Last updated 27 August 2026</p>
+        <p className="privacy-updated">Last updated 28 August 2026</p>
 
         <div className="privacy-content">
           <section>
@@ -34,7 +34,10 @@ export default function PrivacyPage() {
           <section>
             <h2>Analytics</h2>
             <p>
-              We use Vercel Analytics to understand aggregate site usage and game events such as starts, completions, replays, and personal bests. We do not send leaderboard nicknames or device identifiers in game analytics events.
+              We use Vercel Analytics and Google Analytics 4 to understand aggregate site usage and game events such as starts, level completions, run outcomes, replays, and personal bests. These tools may use cookies or similar technologies to measure traffic sources, devices, and browsers. We do not send leaderboard nicknames, email addresses, or device identifiers in game analytics events.
+            </p>
+            <p>
+              Google Analytics is loaded only when configured for this site. Like our existing advertising setup, analytics currently runs without a separate consent banner; if UK consent requirements change, we may add controls aligned with our advertising approach.
             </p>
           </section>
 

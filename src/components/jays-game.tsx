@@ -1,6 +1,5 @@
 "use client";
 
-import { track } from "@vercel/analytics";
 import { ChevronLeft, MapPin, Pause, Play, Send, Share2, Trophy, Volume2, VolumeX } from "lucide-react";
 import Link from "next/link";
 import React, { useCallback, useEffect, useRef, useState } from "react";
@@ -38,6 +37,7 @@ import {
   type LeaderboardEntry,
   type LeaderboardPeriod,
 } from "@/lib/leaderboard-shared";
+import { trackGameEvent } from "@/lib/analytics";
 
 const BEST_RUN_KEY = "jaysforjeans.personalBest.v2";
 const MUTED_KEY = "jaysforjeans.muted.v1";
@@ -71,14 +71,6 @@ type ScorePop = {
 type AudioWindow = Window & typeof globalThis & {
   webkitAudioContext?: typeof AudioContext;
 };
-
-function safeTrack(name: string, properties?: Record<string, string | number | boolean>) {
-  try {
-    track(name, properties);
-  } catch {
-    // Analytics must never affect play.
-  }
-}
 
 function roundedRect(
   context: CanvasRenderingContext2D,
@@ -556,10 +548,14 @@ export function JaysGame() {
       } catch {
         // Local best storage is optional.
       }
-      safeTrack("personal_best", { highest_level: stats.highestLevel, total_jays: stats.totalJays });
+      trackGameEvent(
+        "personal_best",
+        { highest_level: stats.highestLevel, total_jays: stats.totalJays },
+        { highest_level: stats.highestLevel, previous_best_level: bestAtRunStartRef.current },
+      );
     }
     setPhase("results");
-    safeTrack("game_complete", {
+    trackGameEvent("game_complete", {
       highest_level: stats.highestLevel,
       progress_in_failed_level: stats.progress,
       target_in_failed_level: stats.target,
@@ -627,7 +623,13 @@ export function JaysGame() {
         }
         playTone(golden);
         if (navigator.vibrate) navigator.vibrate(golden ? [18, 28, 24] : 12);
-        if (golden) safeTrack("golden_jay_caught", { level: simulation.level, total_jays: event.totalJays });
+        if (golden) {
+          trackGameEvent(
+            "golden_jay_caught",
+            { level: simulation.level, total_jays: event.totalJays },
+            { level: simulation.level, progress_before_catch: event.levelProgress - event.contribution },
+          );
+        }
       }
 
       const cleared = events.find((event) => event.type === "level_complete");
@@ -651,11 +653,16 @@ export function JaysGame() {
         setPhase("level_cleared");
         playTone(true);
         if (navigator.vibrate) navigator.vibrate([24, 30, 34]);
-        safeTrack("level_complete", {
-          level: cleared.level,
-          target: cleared.target,
-          total_jays: simulation.stats.totalJays,
-        });
+        trackGameEvent(
+          "level_complete",
+          { level: cleared.level, target: cleared.target, total_jays: simulation.stats.totalJays },
+          {
+            level: cleared.level,
+            level_target: cleared.target,
+            total_jays: simulation.stats.totalJays,
+            golden_jays: simulation.stats.goldenCatches,
+          },
+        );
         countdownTimersRef.current = [window.setTimeout(() => startNextLevelRef.current(), LEVEL_CLEAR_HOLD_MS)];
         return;
       }
@@ -716,7 +723,7 @@ export function JaysGame() {
         drawJeans(context, simulation, simulation.width, simulation.height, 0, simulation.elapsedMs);
       }
       animationRef.current = window.requestAnimationFrame(renderGame);
-      if (!resume) safeTrack("game_start");
+      if (!resume) trackGameEvent("game_start");
     },
     [renderGame, setPhase],
   );
@@ -797,10 +804,15 @@ export function JaysGame() {
         .catch(() => {
           leaderboardSessionRef.current = undefined;
         });
-      if (replay) safeTrack("game_replay");
+      if (replay) {
+        trackGameEvent("game_replay", undefined, {
+          previous_highest_level: finalStats.highestLevel,
+          previous_total_jays: finalStats.totalJays,
+        });
+      }
       beginCountdown(false);
     },
-    [beginCountdown, bestLevel, board, clearCountdownTimers, unlockAudio],
+    [beginCountdown, bestLevel, board, clearCountdownTimers, finalStats.highestLevel, finalStats.totalJays, unlockAudio],
   );
 
   const pauseGame = useCallback(() => {
@@ -857,7 +869,11 @@ export function JaysGame() {
       const token = leaderboardSessionRef.current;
       if (!token) {
         setLeaderboardFeedback("This round couldn’t be verified. Play again to try another submission.");
-        safeTrack("leaderboard_submit_fail", { board, highest_level: finalStats.highestLevel });
+        trackGameEvent(
+          "leaderboard_submit_fail",
+          { board, highest_level: finalStats.highestLevel },
+          { board, failure_category: "missing_token" },
+        );
         return;
       }
       setSubmittingScore(true);
@@ -879,10 +895,18 @@ export function JaysGame() {
         setLeaderboardPeriod("today");
         setLeaderboardEntries(response.entries);
         setLeaderboardFeedback("You’re on the board!");
-        safeTrack("leaderboard_submit_success", { board, highest_level: finalStats.highestLevel });
+        trackGameEvent(
+          "leaderboard_submit_success",
+          { board, highest_level: finalStats.highestLevel },
+          { board, highest_level: finalStats.highestLevel, total_jays: finalStats.totalJays },
+        );
       } catch {
         setLeaderboardFeedback("Couldn’t submit that score. You can still play again instantly.");
-        safeTrack("leaderboard_submit_fail", { board, highest_level: finalStats.highestLevel });
+        trackGameEvent(
+          "leaderboard_submit_fail",
+          { board, highest_level: finalStats.highestLevel },
+          { board, failure_category: "submit_error" },
+        );
       } finally {
         setSubmittingScore(false);
       }
@@ -986,7 +1010,7 @@ export function JaysGame() {
         setLeaderboardLoading(true);
         if (!leaderboardViewTrackedRef.current) {
           leaderboardViewTrackedRef.current = true;
-          safeTrack("leaderboard_view", { board });
+          trackGameEvent("leaderboard_view", { board }, { board, period: "today" });
         }
         const response = await getLeaderboard(board, "today");
         if (active) setLeaderboardEntries(response.entries);

@@ -3,6 +3,8 @@ import { Analytics } from "@vercel/analytics/next";
 import { Fredoka, Quicksand } from "next/font/google";
 import type { ReactNode } from "react";
 
+import { GoogleAnalytics } from "@/components/google-analytics";
+
 import "./globals.css";
 
 const bodyFont = Quicksand({
@@ -40,6 +42,7 @@ export default function RootLayout({
       <body className={`${bodyFont.variable} ${displayFont.variable} font-sans antialiased`}>
         {children}
         <Analytics />
+        <GoogleAnalytics />
       </body>
     </html>
   );
