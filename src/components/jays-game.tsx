@@ -4,9 +4,13 @@ import { ChevronLeft, MapPin, Pause, Play, Send, Share2, Trophy, Volume2, Volume
 import Link from "next/link";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 
+import { SiteNav } from "@/components/site-nav";
+import { trackGameEvent } from "@/lib/analytics";
 import {
   LEVEL_DURATION_MS,
   LEVEL_CLEAR_HOLD_MS,
+  WAISTBAND_OPENING_WIDTH_RATIO,
+  WAISTBAND_OPENING_Y_OFFSET,
   clampPlayerX,
   createNextLevel,
   createSimulation,
@@ -37,7 +41,6 @@ import {
   type LeaderboardEntry,
   type LeaderboardPeriod,
 } from "@/lib/leaderboard-shared";
-import { trackGameEvent } from "@/lib/analytics";
 
 const BEST_RUN_KEY = "jaysforjeans.personalBest.v2";
 const MUTED_KEY = "jaysforjeans.muted.v1";
@@ -306,8 +309,8 @@ function drawJeans(
   context.beginPath();
   context.ellipse(
     x,
-    y + 10,
-    size.width * (0.46 + proximityFlex * 0.025),
+    y + WAISTBAND_OPENING_Y_OFFSET,
+    size.width * (WAISTBAND_OPENING_WIDTH_RATIO + proximityFlex * 0.025),
     11 + proximityFlex * 5 + squash * 2.5,
     0,
     0,
@@ -322,7 +325,7 @@ function drawJeans(
     context.strokeStyle = goldenReaction > 0.1 ? "#fff2a1" : "#8cc8f4";
     context.lineWidth = 3;
     context.beginPath();
-    context.ellipse(x, y + 12, size.width * 0.39, 6 + proximityFlex * 4, 0, 0, Math.PI * 2);
+    context.ellipse(x, y + WAISTBAND_OPENING_Y_OFFSET + 2, size.width * 0.39, 6 + proximityFlex * 4, 0, 0, Math.PI * 2);
     context.stroke();
     context.restore();
   }
@@ -473,7 +476,7 @@ export function JaysGame() {
     const canvas = canvasRef.current;
     const stage = stageRef.current;
     if (!canvas || !stage) return;
-    const rect = stage.getBoundingClientRect();
+    const rect = canvas.getBoundingClientRect();
     const width = Math.max(1, rect.width);
     const height = Math.max(1, rect.height);
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -702,7 +705,7 @@ export function JaysGame() {
       const stage = stageRef.current;
       if (!canvas || !stage) return;
       if (!resume) {
-        const rect = stage.getBoundingClientRect();
+        const rect = canvas.getBoundingClientRect();
         simulationRef.current = createSimulation(rect.width, rect.height);
       }
       const simulation = simulationRef.current;
@@ -1033,7 +1036,7 @@ export function JaysGame() {
     if (!canvas || !stage) return;
     const context = canvas.getContext("2d");
     if (!context) return;
-    const rect = stage.getBoundingClientRect();
+    const rect = canvas.getBoundingClientRect();
     const demo = createSimulation(Math.max(1, rect.width), Math.max(1, rect.height));
     demo.config = {
       ...demo.config,
@@ -1182,6 +1185,7 @@ export function JaysGame() {
             <div className="intro-footer">
               {bestLevel > 0 && <p className="best-line">BEST LEVEL <strong>{bestLevel}</strong></p>}
               <p className="control-hint">Catch as many Jays in Jeans as you can</p>
+              <SiteNav className="site-nav--game" />
               <Link className="privacy-link" href="/privacy">Privacy</Link>
             </div>
           </div>

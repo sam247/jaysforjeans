@@ -12,6 +12,7 @@ import {
   getNextLevelTransition,
   getPlayerSize,
   getTouchPlayerY,
+  getWaistbandIntake,
   maximumRunJays,
   minimumRunJays,
   resultMessage,
@@ -24,14 +25,27 @@ import {
 const fixedRandom = (value = 0.5) => () => value;
 
 function catchJay(simulation: GameSimulation, kind: JayKind = "normal") {
-  const waistY = simulation.playerY;
+  const intake = getWaistbandIntake(simulation, kind);
+  const radius = kind === "golden" ? 20 : 22;
   const jay: Jay = {
     id: simulation.nextId++, kind, status: "falling", variant: 0,
-    x: simulation.playerX, y: waistY, radius: kind === "golden" ? 20 : 22,
+    x: simulation.playerX, y: intake.centerY - radius * 0.94, radius,
     speedFactor: 1, drift: 1, wobble: 0, caughtAgeMs: 0,
   };
   simulation.jays = [jay];
   return updateSimulation(simulation, 0, fixedRandom());
+}
+
+function jayAtIntake(simulation: GameSimulation, x: number, kind: JayKind = "normal") {
+  const intake = getWaistbandIntake(simulation, kind);
+  const radius = kind === "golden" ? 20 : 22;
+  const jay: Jay = {
+    id: simulation.nextId++, kind, status: "falling", variant: 0,
+    x, y: intake.centerY - radius * 0.94, radius,
+    speedFactor: 1, drift: 1, wobble: 0, caughtAgeMs: 0,
+  };
+  simulation.jays = [jay];
+  return jay;
 }
 
 describe("jays survival engine", () => {
@@ -81,6 +95,79 @@ describe("jays survival engine", () => {
 
     expect(752 - (simulation.playerY + playerHeight)).toBeGreaterThanOrEqual(TOUCH_THUMB_GAP_PX);
     expect(catchJay(simulation)).toContainEqual(expect.objectContaining({ type: "catch" }));
+  });
+
+  it("catches a Jay through the centre of the visible intake", () => {
+    const simulation = createSimulation(390, 760, fixedRandom());
+    jayAtIntake(simulation, simulation.playerX);
+    expect(updateSimulation(simulation, 0, fixedRandom())).toContainEqual(expect.objectContaining({ type: "catch" }));
+  });
+
+  it.each(["left", "right"] as const)("catches a lower body overlapping the %s intake edge", (side) => {
+    const simulation = createSimulation(390, 760, fixedRandom(), 10);
+    const intake = getWaistbandIntake(simulation, "normal");
+    const radius = 22;
+    const visibleOpeningHalfWidth = getPlayerSize(simulation.width).width * 0.46;
+    expect(intake.halfWidth).toBeCloseTo(visibleOpeningHalfWidth);
+    const edgeDistance = visibleOpeningHalfWidth + radius * 0.3 + intake.forgiveness - 0.25;
+    jayAtIntake(simulation, simulation.playerX + edgeDistance * (side === "left" ? -1 : 1));
+    expect(updateSimulation(simulation, 0, fixedRandom())).toContainEqual(expect.objectContaining({ type: "catch" }));
+  });
+
+  it("does not catch an obviously outside Jay", () => {
+    const simulation = createSimulation(390, 760, fixedRandom(), 10);
+    const intake = getWaistbandIntake(simulation, "normal");
+    const jay = jayAtIntake(
+      simulation,
+      simulation.playerX + intake.halfWidth + 22 * 0.3 + intake.forgiveness + 10,
+    );
+    expect(updateSimulation(simulation, 0, fixedRandom())).not.toContainEqual(expect.objectContaining({ type: "catch" }));
+    jay.y = simulation.height + jay.radius + 1;
+    expect(updateSimulation(simulation, 0, fixedRandom())).toContainEqual({ type: "miss" });
+  });
+
+  it("sweeps a high-speed Jay through the intake instead of tunnelling past it", () => {
+    const simulation = createSimulation(390, 760, fixedRandom(), 100);
+    const jay = simulation.jays[0];
+    const intake = getWaistbandIntake(simulation, jay.kind);
+    jay.x = simulation.playerX;
+    jay.y = intake.centerY - jay.radius * 0.94 - intake.halfHeight - intake.forgiveness - 14;
+    jay.speedFactor = 1;
+    expect(updateSimulation(simulation, 34, fixedRandom())).toContainEqual(expect.objectContaining({ type: "catch" }));
+  });
+
+  it("catches a Golden Jay using its rendered lower-body dimensions", () => {
+    const simulation = createSimulation(390, 760, fixedRandom(), 10);
+    jayAtIntake(simulation, simulation.playerX, "golden");
+    expect(updateSimulation(simulation, 0, fixedRandom())).toContainEqual(expect.objectContaining({
+      type: "catch", kind: "golden", contribution: 5,
+    }));
+  });
+
+  it("sweeps the moving waistband across a valid Jay", () => {
+    const simulation = createSimulation(390, 760, fixedRandom(), 10);
+    simulation.playerX = 100;
+    simulation.playerTargetX = 250;
+    jayAtIntake(simulation, 180);
+    expect(updateSimulation(simulation, 34, fixedRandom())).toContainEqual(expect.objectContaining({ type: "catch" }));
+  });
+
+  it("keeps caught ownership and can never turn that Jay into a miss", () => {
+    const simulation = createSimulation(390, 760, fixedRandom());
+    expect(catchJay(simulation)).toContainEqual(expect.objectContaining({ type: "catch" }));
+    simulation.jays[0].y = simulation.height + simulation.jays[0].radius + 100;
+    const laterEvents = updateSimulation(simulation, 34, fixedRandom());
+    expect(laterEvents).not.toContainEqual({ type: "miss" });
+    expect(simulation.stats.misses).toBe(0);
+  });
+
+  it("awards a caught Jay exactly once across later frames", () => {
+    const simulation = createSimulation(390, 760, fixedRandom());
+    expect(catchJay(simulation).filter((event) => event.type === "catch")).toHaveLength(1);
+    const scoreAfterCatch = simulation.stats.totalJays;
+    const laterEvents = updateSimulation(simulation, 34, fixedRandom());
+    expect(laterEvents.filter((event) => event.type === "catch")).toHaveLength(0);
+    expect(simulation.stats.totalJays).toBe(scoreAfterCatch);
   });
 
   it("counts a Golden Jay as five towards the level target", () => {

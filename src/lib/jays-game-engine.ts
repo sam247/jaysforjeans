@@ -4,6 +4,8 @@ export const NEXT_LEVEL_COUNTDOWN_STEP_MS = 450;
 export const TOUCH_LAG_CAP_PX = 14;
 export const TOUCH_THUMB_GAP_PX = 28;
 export const MAX_VALIDATED_LEVEL = 999;
+export const WAISTBAND_OPENING_WIDTH_RATIO = 0.46;
+export const WAISTBAND_OPENING_Y_OFFSET = 10;
 
 export type GamePhase = "intro" | "countdown" | "playing" | "paused" | "level_cleared" | "results";
 export type JayKind = "normal" | "golden";
@@ -76,6 +78,14 @@ export type GameEvent =
   | { type: "run_complete" };
 
 export type RandomSource = () => number;
+
+export type WaistbandIntake = {
+  centerX: number;
+  centerY: number;
+  halfWidth: number;
+  halfHeight: number;
+  forgiveness: number;
+};
 
 export function getNextLevelTransition(level: number) {
   const nextLevel = Math.max(2, Math.floor(level));
@@ -174,6 +184,76 @@ export function applyTouchPosition(currentX: number, targetX: number, width: num
   return clampPlayerX(next, width, playerWidth);
 }
 
+export function getWaistbandIntake(
+  simulation: GameSimulation,
+  kind: JayKind,
+  playerX = simulation.playerX,
+  playerY = simulation.playerY,
+): WaistbandIntake {
+  const playerSize = getPlayerSize(simulation.width);
+  const goldenMultiplier = kind === "golden" ? simulation.config.goldenCatchMultiplier : 1;
+  const visibleHalfWidth = playerSize.width * WAISTBAND_OPENING_WIDTH_RATIO;
+  return {
+    centerX: playerX,
+    centerY: playerY + WAISTBAND_OPENING_Y_OFFSET,
+    halfWidth: visibleHalfWidth,
+    halfHeight: clamp(simulation.config.catchBandDepth * goldenMultiplier * 0.5, 7, 12),
+    forgiveness: clamp(simulation.width * 0.012, 4, 5),
+  };
+}
+
+function segmentBoxEntry(
+  fromX: number,
+  fromY: number,
+  toX: number,
+  toY: number,
+  halfWidth: number,
+  halfHeight: number,
+) {
+  let entry = 0;
+  let exit = 1;
+  const axes = [
+    { start: fromX, delta: toX - fromX, minimum: -halfWidth, maximum: halfWidth },
+    { start: fromY, delta: toY - fromY, minimum: -halfHeight, maximum: halfHeight },
+  ];
+  for (const axis of axes) {
+    if (Math.abs(axis.delta) < 0.000001) {
+      if (axis.start < axis.minimum || axis.start > axis.maximum) return null;
+      continue;
+    }
+    const first = (axis.minimum - axis.start) / axis.delta;
+    const second = (axis.maximum - axis.start) / axis.delta;
+    entry = Math.max(entry, Math.min(first, second));
+    exit = Math.min(exit, Math.max(first, second));
+    if (entry > exit) return null;
+  }
+  return entry >= 0 && entry <= 1 ? entry : null;
+}
+
+function sweptWaistbandEntry(
+  simulation: GameSimulation,
+  jay: Jay,
+  previousJayX: number,
+  previousJayY: number,
+  previousPlayerX: number,
+  previousPlayerY: number,
+) {
+  const previousIntake = getWaistbandIntake(simulation, jay.kind, previousPlayerX, previousPlayerY);
+  const currentIntake = getWaistbandIntake(simulation, jay.kind);
+  const lowerBodyYOffset = jay.radius * 0.94;
+  const lowerBodyHalfWidth = jay.radius * 0.3;
+  const expandedHalfWidth = currentIntake.halfWidth + lowerBodyHalfWidth + currentIntake.forgiveness;
+  const expandedHalfHeight = currentIntake.halfHeight + currentIntake.forgiveness;
+  return segmentBoxEntry(
+    previousJayX - previousIntake.centerX,
+    previousJayY + lowerBodyYOffset - previousIntake.centerY,
+    jay.x - currentIntake.centerX,
+    jay.y + lowerBodyYOffset - currentIntake.centerY,
+    expandedHalfWidth,
+    expandedHalfHeight,
+  );
+}
+
 function jayRadius(width: number) {
   return clamp(width * 0.052, 19, 27);
 }
@@ -268,6 +348,7 @@ export function updateSimulation(simulation: GameSimulation, deltaMs: number, ra
   simulation.elapsedMs = Math.min(simulation.config.durationMs, simulation.elapsedMs + dt);
   const playerSize = getPlayerSize(simulation.width);
   const previousPlayerX = simulation.playerX;
+  const previousPlayerY = simulation.playerY;
   simulation.playerX = applyTouchPosition(simulation.playerX, simulation.playerTargetX, simulation.width, playerSize.width, dt);
   const verticalResponsiveness = 1 - Math.exp(-dt * 0.02);
   simulation.playerY += (clampPlayerY(simulation.playerTargetY, simulation.width, simulation.height) - simulation.playerY) * verticalResponsiveness;
@@ -293,16 +374,23 @@ export function updateSimulation(simulation: GameSimulation, deltaMs: number, ra
       if (jay.caughtAgeMs < 220) surviving.push(jay);
       continue;
     }
+    const previousJayX = jay.x;
+    const previousJayY = jay.y;
     jay.wobble += dt * 0.004;
     jay.x += Math.sin(jay.wobble) * simulation.config.driftStrength * jay.drift * (dt / 1000);
     jay.x = clamp(jay.x, jay.radius + 8, simulation.width - jay.radius - 8);
     jay.y += simulation.height * simulation.config.speedHeightsPerSecond * jay.speedFactor * (dt / 1000);
-    const goldenMultiplier = jay.kind === "golden" ? simulation.config.goldenCatchMultiplier : 1;
-    const catchHalfWidth = playerSize.width * simulation.config.catchWidthMultiplier * goldenMultiplier;
-    const catchBandDepth = simulation.config.catchBandDepth * goldenMultiplier;
-    const inWaistBand = jay.y + jay.radius * 0.58 >= waistY && jay.y <= waistY + catchBandDepth;
-    const inCatchWidth = Math.abs(jay.x - simulation.playerX) <= catchHalfWidth;
-    if (inWaistBand && inCatchWidth) {
+    const catchEntry = sweptWaistbandEntry(
+      simulation,
+      jay,
+      previousJayX,
+      previousJayY,
+      previousPlayerX,
+      previousPlayerY,
+    );
+    if (catchEntry !== null) {
+      jay.x = mix(previousJayX, jay.x, catchEntry);
+      jay.y = mix(previousJayY, jay.y, catchEntry);
       jay.status = "caught";
       jay.caughtAgeMs = 0;
       const contribution = jay.kind === "golden" ? 5 : 1;
